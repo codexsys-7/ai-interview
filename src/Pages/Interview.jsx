@@ -279,16 +279,30 @@ export default function Interview() {
     });
   };
 
+  // Helper to merge the current answer
+  const buildAnswersWithCurrent = () => {
+    if (!q) return answers;
 
-  // const speak = (text) => {
-  //   if (!("speechSynthesis" in window)) return;
-  //   const u = new SpeechSynthesisUtterance(text);
-  //   u.rate = 0.95;
-  //   u.pitch = 1;
-  //   u.volume = 1;
-  //   window.speechSynthesis.cancel(); // prevent overlap
-  //   window.speechSynthesis.speak(u);
-  // };
+    const userAnswer = (transcript || "").trim();
+    const entry = {
+      id: q.id,
+      prompt: q.prompt,
+      interviewer: q.interviewer,
+      type: q.type,
+      userAnswer,
+      idealAnswer: q.idealAnswer || "",
+    };
+
+    const next = [...answers];
+    const ix = next.findIndex((a) => a.id === q.id);
+    if (ix >= 0) next[ix] = entry;
+    else next.push(entry);
+
+    // keep state in sync for future (if needed)
+    setAnswers(next);
+    return next;
+  };
+
 
   // ---------- Think timer flow ----------
   useEffect(() => {
@@ -327,50 +341,6 @@ export default function Interview() {
     speak(q?.prompt || "");
   };
 
-  // ---------- Score current answer ----------
-  // const scoreCurrent = async () => {
-  //   if (!q) return;
-  //   const userAnswer = (transcript || "").trim() || "(no answer)";
-  //   stopRecording();
-  //   setIsScoring(true);
-  //   try {
-  //     const resp = await fetch("/api/score-answer", {
-  //       method: "POST",
-  //       headers: { "Content-Type": "application/json" },
-  //       body: JSON.stringify({
-  //         question: q.prompt,
-  //         idealAnswer: q.idealAnswer,
-  //         rubric: q.rubric,
-  //         userAnswer
-  //       })
-  //     });
-  //     const scored = await resp.json();
-  //     const entry = {
-  //       id: q.id,
-  //       topic: q.topic,
-  //       interviewer: q.interviewer,
-  //       type: q.type,
-  //       userAnswer,
-  //       bestAnswer: scored.bestAnswer || [],
-  //       improvements: scored.improvements || [],
-  //       scores: scored.scores || {}
-  //     };
-  //     setAnswers((prev) => {
-  //       const next = [...prev];
-  //       // replace or append this question’s result
-  //       const ix = next.findIndex((a) => a.id === q.id);
-  //       if (ix >= 0) next[ix] = entry;
-  //       else next.push(entry);
-  //       return next;
-  //     });
-  //   } catch (e) {
-  //     console.error("scoring failed", e);
-  //     alert("Could not score the answer. Please try again.");
-  //   } finally {
-  //     setIsScoring(false);
-  //   }
-  // };
-
   // ---------- Next question ----------
   const handleNext = () => {
     if (!plan) return;
@@ -390,20 +360,35 @@ export default function Interview() {
 
 
   // ---------- End interview ----------
-  const handleEnd = () => {
-    stopRecording();
-    // persist the last answer too
-    saveCurrentAnswer();
+  const handleEndInterview = () => {
+    // stop STT if running
+    stopRecording?.();
 
-    const payload = { meta: plan.meta, answers };
-    localStorage.setItem("interviewResults", JSON.stringify(payload)); // RESULTS_KEY
+    if (!plan) {
+      navigate("/resume-analysis");
+      return;
+    }
 
-    // also turn off camera/mic (you already have cleanup in unmount, this is just immediate)
-    streamRef.current?.getTracks()?.forEach((t) => t.stop());
+    // include the current question's answer as well
+    const merged = buildAnswersWithCurrent();
 
-    // go to feedback (or keep user on the page if you want)
+    const payload = {
+      meta: plan.meta || {},
+      answers: merged,
+    };
+
+    localStorage.setItem(RESULTS_KEY, JSON.stringify(payload));
+
+    // optionally kill camera/mic immediately (cleanup also runs on unmount)
+    try {
+      streamRef.current?.getTracks?.().forEach((t) => t.stop());
+    } catch (e) {
+      console.warn("Stream cleanup failed:", e);
+    }
+
     navigate("/feedback");
   };
+
 
 
   if (!plan || !q) {
@@ -472,7 +457,7 @@ export default function Interview() {
         onStopRecording={stopRecording}
         onRepeatQuestion={handleRepeat}
         onNextQuestion={handleNext}
-        onEndInterview={handleEnd}
+        onEndInterview={handleEndInterview}
         showThinkTime={showThinkTime}
         transcript={transcript}
       />

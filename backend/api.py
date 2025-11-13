@@ -419,19 +419,92 @@ class ScoreInterviewResp(BaseModel):
 
 
 def build_scoring_system_prompt() -> str:
+    """
+    System prompt for the scoring LLM call.
+
+    We keep the JSON schema simple for the model:
+    {
+      "questions": [
+        {
+          "id": number,
+          "scores": {
+            "content": 0-5,
+            "structure": 0-5,
+            "clarity": 0-5,
+            "confidence": 0-5,
+            "relevance": 0-5
+          },
+          "strengths": ["...", "..."],
+          "improvements": ["...", "..."],
+          "suggestedAnswer": "..."
+        }
+      ],
+      "overall": {
+        "overallScore": 0-5,
+        "summary": "...",
+        "strengths": ["...", "..."],
+        "improvements": ["...", "..."]
+      }
+    }
+    """
     return (
-        "You are a supportive interview coach. "
-        "You evaluate answers with kindness and specificity.\n\n"
-        "Rules:\n"
-        "- Tone: encouraging, positive, never harsh or demoralizing.\n"
-        "- For each question, give:\n"
-        "  * scores (0–5) for content, structure, clarity, confidence, relevance\n"
-        "  * 2–4 strengths (bullet-style phrases)\n"
-        "  * 2–4 improvements (practical, actionable, optimistic)\n"
-        "  * a suggestedAnswer that is concise, high-quality, and realistic for the candidate.\n"
-        "- Overall section: one overallScore (0–5), and 3–5 strengths + 3–5 improvements.\n"
-        "- Focus on helping the user come back and improve, not judging them.\n"
-        "Return STRICT JSON for the given schema. No markdown, no extra keys."
+        "You are a supportive interview coach evaluating a candidate's answers.\n\n"
+        "You will receive JSON with:\n"
+        "{\n"
+        '  "role": string,\n'
+        '  "difficulty": string,\n'
+        '  "answers": [\n'
+        "    {\n"
+        '      "id": number,\n'
+        '      "prompt": string,\n'
+        '      "interviewer": string,\n'
+        '      "type": string,\n'
+        '      "userAnswer": string,\n'
+        '      "idealAnswer": string | null\n'
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "Your job:\n"
+        "1) For EACH answer, produce:\n"
+        "   - scores (0–5, floats allowed) for:\n"
+        "       content, structure, clarity, confidence, relevance\n"
+        "   - strengths: 2–4 short bullet-style strings (what they did well)\n"
+        "   - improvements: 2–4 short bullet-style strings (specific, actionable, optimistic)\n"
+        "   - suggestedAnswer: a concise, strong answer in a realistic tone for this candidate.\n"
+        "2) Overall section:\n"
+        "   - overallScore: single float 0–5 summarizing the interview.\n"
+        "   - summary: 2–3 sentences, honest but encouraging.\n"
+        "   - strengths: 3–5 positive bullet-style observations.\n"
+        "   - improvements: 3–5 very practical next steps.\n\n"
+        "Tone guidelines:\n"
+        "- Always kind, constructive, and growth-oriented.\n"
+        "- Avoid harsh language. Focus on what they CAN do to improve.\n"
+        "- Use encouraging phrasing (\"You can strengthen this by...\", \"Next time, try...\").\n\n"
+        "You MUST return STRICT JSON ONLY with EXACTLY this shape:\n"
+        "{\n"
+        '  "questions": [\n'
+        "    {\n"
+        '      "id": number,\n'
+        '      "scores": {\n'
+        '        "content": number,\n'
+        '        "structure": number,\n'
+        '        "clarity": number,\n'
+        '        "confidence": number,\n'
+        '        "relevance": number\n'
+        "      },\n"
+        '      "strengths": [string, ...],\n'
+        '      "improvements": [string, ...],\n'
+        '      "suggestedAnswer": string\n'
+        "    }\n"
+        "  ],\n"
+        '  "overall": {\n'
+        '    "overallScore": number,\n'
+        '    "summary": string,\n'
+        '    "strengths": [string, ...],\n'
+        '    "improvements": [string, ...]\n'
+        "  }\n"
+        "}\n\n"
+        "No markdown. No explanations. No extra keys. JSON ONLY."
     )
 
 
@@ -441,11 +514,13 @@ def score_interview(req: ScoreInterviewReq):
     Takes all user answers at the end of the interview and returns
     per-question feedback + an overall summary.
     """
+    if not req.answers:
+        raise HTTPException(status_code=400, detail="No answers provided to score.")
+
     try:
         system = build_scoring_system_prompt()
 
-        # We send the whole payload as JSON in the user message so the model
-        # has all answers and metadata.
+        # Send the whole payload as JSON so the model has context.
         user_payload = {
             "role": req.role,
             "difficulty": req.difficulty,
@@ -454,10 +529,7 @@ def score_interview(req: ScoreInterviewReq):
 
         messages = [
             {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": json.dumps(user_payload, ensure_ascii=False),
-            },
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
         ]
 
         r = call_openai_with_backoff(
@@ -470,9 +542,125 @@ def score_interview(req: ScoreInterviewReq):
         raw = r.choices[0].message.content
         data = json.loads(raw)
 
-        # Validate & coerce into our schema
-        parsed = ScoreInterviewResp.model_validate(data)
-        return parsed
+        # -------- Map model JSON -> our Pydantic schema --------
+        q_list = data.get("questions") or []
+        overall_raw = data.get("overall") or {}
+
+        # Index returned question feedback by id (as string for safety)
+        scored_by_id: Dict[str, Dict[str, Any]] = {}
+        if isinstance(q_list, list):
+            for item in q_list:
+                try:
+                    sid = str(item.get("id"))
+                    if sid:
+                        scored_by_id[sid] = item
+                except Exception:
+                    continue
+
+        questions_out: List[QuestionFeedback] = []
+
+        for a in req.answers:
+            scored = scored_by_id.get(str(a.id), {}) or {}
+
+            raw_scores = scored.get("scores") or {}
+            def get_score(key: str, default: float = 3.0) -> float:
+                try:
+                    val = raw_scores.get(key, default)
+                    return float(val)
+                except Exception:
+                    return default
+
+            scores_obj = {
+                "content":   get_score("content"),
+                "structure": get_score("structure"),
+                "clarity":   get_score("clarity"),
+                "confidence":get_score("confidence"),
+                "relevance": get_score("relevance"),
+            }
+
+            strengths = scored.get("strengths") or []
+            if not isinstance(strengths, list):
+                strengths = [str(strengths)]
+
+            improvements = scored.get("improvements") or []
+            if not isinstance(improvements, list):
+                improvements = [str(improvements)]
+
+            suggested = scored.get("suggestedAnswer") or ""
+            if not suggested:
+                suggested = (
+                    a.idealAnswer
+                    or "A strong answer would clearly state the situation, your actions, and the measurable result."
+                )
+
+            # Ensure at least one positive + one improvement
+            if not strengths:
+                strengths = ["You attempted to answer and shared relevant experience."]
+            if not improvements:
+                improvements = [
+                    "Use a clear beginning–middle–end (STAR: Situation, Task, Action, Result).",
+                    "Add 1–2 concrete metrics to show impact."
+                ]
+
+            questions_out.append(
+                QuestionFeedback(
+                    id=a.id,
+                    prompt=a.prompt,
+                    interviewer=a.interviewer,
+                    type=a.type,
+                    userAnswer=a.userAnswer,
+                    idealAnswer=a.idealAnswer
+                        or "A strong answer would clearly state context, approach, and outcome with metrics.",
+                    scores=scores_obj,
+                    strengths=[str(x) for x in strengths],
+                    improvements=[str(x) for x in improvements],
+                    suggestedAnswer=suggested,
+                )
+            )
+
+        # Overall block
+        try:
+            overall_score = float(overall_raw.get("overallScore", 3.0))
+        except Exception:
+            overall_score = 3.0
+
+        overall_summary = overall_raw.get("summary") or (
+            "Promising baseline. With more structure, clarity, and metrics, you can sound very strong."
+        )
+
+        overall_strengths = overall_raw.get("strengths") or [
+            "You consistently tried to address each question.",
+            "You have relevant experience you can build into strong stories."
+        ]
+        if not isinstance(overall_strengths, list):
+            overall_strengths = [str(overall_strengths)]
+
+        overall_improvements = overall_raw.get("improvements") or [
+            "Practice using STAR structure (Situation, Task, Action, Result).",
+            "Add 1–2 numbers (%, $, time saved) to each story.",
+            "Slow down and pause between points to sound more confident."
+        ]
+        if not isinstance(overall_improvements, list):
+            overall_improvements = [str(overall_improvements)]
+
+        overall_obj = OverallFeedback(
+            overallScore=overall_score,
+            summary=overall_summary,
+            strengths=[str(x) for x in overall_strengths],
+            improvements=[str(x) for x in overall_improvements],
+        )
+
+        resp = ScoreInterviewResp(
+            meta={
+                "role": req.role,
+                "difficulty": req.difficulty,
+                "questionCount": len(req.answers),
+                "fallback": False,
+            },
+            questions=questions_out,
+            overall=overall_obj,
+        )
+        return resp
 
     except Exception as e:
         logging.exception("score-interview failed")
@@ -491,7 +679,8 @@ def score_interview(req: ScoreInterviewReq):
                     interviewer=a.interviewer,
                     type=a.type,
                     userAnswer=a.userAnswer,
-                    idealAnswer=a.idealAnswer or "A strong answer would clearly state context, approach, and outcome with metrics.",
+                    idealAnswer=a.idealAnswer
+                        or "A strong answer would clearly state context, approach, and outcome with metrics.",
                     scores={
                         "content": 3.0,
                         "structure": 3.0,
@@ -499,7 +688,10 @@ def score_interview(req: ScoreInterviewReq):
                         "confidence": 3.0,
                         "relevance": 3.0,
                     },
-                    strengths=["You attempted to address the question.", "You have relevant experience to build on."],
+                    strengths=[
+                        "You attempted to address the question.",
+                        "You have relevant experience to build on."
+                    ],
                     improvements=[
                         "Add more concrete examples and metrics.",
                         "Use a clear structure: situation, actions, and measurable result."
@@ -513,7 +705,7 @@ def score_interview(req: ScoreInterviewReq):
                 summary="Promising baseline with room to improve clarity, structure, and impact-focused storytelling.",
                 strengths=[
                     "You have relevant experience to talk about.",
-                    "You show willingness to answer each question.",
+                    "You showed willingness to answer each question.",
                 ],
                 improvements=[
                     "Practice using STAR structure (Situation, Task, Action, Result).",
