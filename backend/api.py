@@ -375,6 +375,154 @@ def generate_questions(req: GenerateReq):
         raise HTTPException(status_code=500, detail=f"Failed to generate questions: {e}")
 
 
+# ---------- Scoring: end-of-interview feedback ----------
+
+class AnswerIn(BaseModel):
+    id: int
+    prompt: str
+    interviewer: str
+    type: str
+    userAnswer: str
+    idealAnswer: Optional[str] = None  # from question generator if available
+
+
+class QuestionFeedback(BaseModel):
+    id: int
+    prompt: str
+    interviewer: str
+    type: str
+    userAnswer: str
+    idealAnswer: str
+    scores: Dict[str, float]          # e.g. {"content": 4.2, "structure": 3.8, ...}
+    strengths: List[str]
+    improvements: List[str]
+    suggestedAnswer: str              # polished, ideal answer in coach-y tone
+
+
+class OverallFeedback(BaseModel):
+    overallScore: float               # 0–5
+    summary: str
+    strengths: List[str]
+    improvements: List[str]
+
+
+class ScoreInterviewReq(BaseModel):
+    role: str
+    difficulty: str
+    answers: List[AnswerIn]
+
+
+class ScoreInterviewResp(BaseModel):
+    meta: Dict[str, Any]
+    questions: List[QuestionFeedback]
+    overall: OverallFeedback
+
+
+def build_scoring_system_prompt() -> str:
+    return (
+        "You are a supportive interview coach. "
+        "You evaluate answers with kindness and specificity.\n\n"
+        "Rules:\n"
+        "- Tone: encouraging, positive, never harsh or demoralizing.\n"
+        "- For each question, give:\n"
+        "  * scores (0–5) for content, structure, clarity, confidence, relevance\n"
+        "  * 2–4 strengths (bullet-style phrases)\n"
+        "  * 2–4 improvements (practical, actionable, optimistic)\n"
+        "  * a suggestedAnswer that is concise, high-quality, and realistic for the candidate.\n"
+        "- Overall section: one overallScore (0–5), and 3–5 strengths + 3–5 improvements.\n"
+        "- Focus on helping the user come back and improve, not judging them.\n"
+        "Return STRICT JSON for the given schema. No markdown, no extra keys."
+    )
+
+
+@app.post("/api/score-interview", response_model=ScoreInterviewResp)
+def score_interview(req: ScoreInterviewReq):
+    """
+    Takes all user answers at the end of the interview and returns
+    per-question feedback + an overall summary.
+    """
+    try:
+        system = build_scoring_system_prompt()
+
+        # We send the whole payload as JSON in the user message so the model
+        # has all answers and metadata.
+        user_payload = {
+            "role": req.role,
+            "difficulty": req.difficulty,
+            "answers": [a.model_dump() for a in req.answers],
+        }
+
+        messages = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": json.dumps(user_payload, ensure_ascii=False),
+            },
+        ]
+
+        r = call_openai_with_backoff(
+            model="gpt-4o-mini",
+            temperature=0.3,
+            response_format={"type": "json_object"},
+            messages=messages,
+        )
+
+        raw = r.choices[0].message.content
+        data = json.loads(raw)
+
+        # Validate & coerce into our schema
+        parsed = ScoreInterviewResp.model_validate(data)
+        return parsed
+
+    except Exception as e:
+        logging.exception("score-interview failed")
+        # Fallback: return a neutral, generic report so UI still works
+        return ScoreInterviewResp(
+            meta={
+                "role": req.role,
+                "difficulty": req.difficulty,
+                "questionCount": len(req.answers),
+                "fallback": True,
+            },
+            questions=[
+                QuestionFeedback(
+                    id=a.id,
+                    prompt=a.prompt,
+                    interviewer=a.interviewer,
+                    type=a.type,
+                    userAnswer=a.userAnswer,
+                    idealAnswer=a.idealAnswer or "A strong answer would clearly state context, approach, and outcome with metrics.",
+                    scores={
+                        "content": 3.0,
+                        "structure": 3.0,
+                        "clarity": 3.0,
+                        "confidence": 3.0,
+                        "relevance": 3.0,
+                    },
+                    strengths=["You attempted to address the question.", "You have relevant experience to build on."],
+                    improvements=[
+                        "Add more concrete examples and metrics.",
+                        "Use a clear structure: situation, actions, and measurable result."
+                    ],
+                    suggestedAnswer="A good answer would briefly describe the situation, your actions, and the measurable impact.",
+                )
+                for a in req.answers
+            ],
+            overall=OverallFeedback(
+                overallScore=3.0,
+                summary="Promising baseline with room to improve clarity, structure, and impact-focused storytelling.",
+                strengths=[
+                    "You have relevant experience to talk about.",
+                    "You show willingness to answer each question.",
+                ],
+                improvements=[
+                    "Practice using STAR structure (Situation, Task, Action, Result).",
+                    "Quantify outcomes where possible (%, $, time saved).",
+                    "Slow down and speak with more confidence and pauses.",
+                ],
+            ),
+        )
+
 
 
 
