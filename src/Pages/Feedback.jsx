@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileText, TrendingUp, ArrowRight, Download, Share2 } from "lucide-react";
+import { FileText, TrendingUp, ArrowRight, Download } from "lucide-react";
 
 const PLAN_KEY = "interviewPlan";
 const RESULTS_KEY = "interviewResults";
@@ -237,7 +237,7 @@ export default function Feedback() {
           ))}
         </div>
 
-        {/* Bottom actions: download & share */}
+        {/* Bottom actions: download only + start next interview */}
         <div className="flex flex-wrap justify-between items-center gap-4 pt-4 border-t border-gray-200">
           <div className="flex gap-3">
             <button
@@ -250,17 +250,6 @@ export default function Feedback() {
             >
               <Download className="w-4 h-4" />
               Download Full Report
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                // TODO: implement share functionality (copy link, etc.)
-                alert("Share report coming soon!");
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-600 bg-indigo-600 text-white hover:bg-indigo-700 text-sm font-medium"
-            >
-              <Share2 className="w-4 h-4" />
-              Share Report
             </button>
           </div>
 
