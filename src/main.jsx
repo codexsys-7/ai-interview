@@ -10,7 +10,7 @@ import Home from "./Pages/Home.jsx";
 import ResumeAnalysis from "./Pages/ResumeAnalysis.jsx";
 import Interview from "./Pages/Interview.jsx";
 import Feedback from "./Pages/Feedback.jsx";
-import Complete from "./Pages/Complete.jsx";
+// import Complete from "./Pages/Complete.jsx";
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
@@ -21,7 +21,7 @@ createRoot(document.getElementById("root")).render(
           <Route path="/resume-analysis" element={<ResumeAnalysis />} />
           <Route path="/interview" element={<Interview />} />
           <Route path="/feedback" element={<Feedback />} />
-          <Route path="/complete" element={<Complete />} />
+          {/* <Route path="/complete" element={<Complete />} /> */}
         </Route>
       </Routes>
     </BrowserRouter>

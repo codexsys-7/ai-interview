@@ -41,7 +41,7 @@ export default function Layout() {
                 <NavLink to="/resume-analysis" className={linkClass}>Resume Analysis</NavLink>
                 <NavLink to="/interview" className={linkClass}>Interview</NavLink>
                 <NavLink to="/feedback" className={linkClass}>Feedback</NavLink>
-                <NavLink to="/complete" className={linkClass}>Complete</NavLink>
+                {/* <NavLink to="/complete" className={linkClass}>Complete</NavLink> */}
               </nav>
             </div>
           </div>
