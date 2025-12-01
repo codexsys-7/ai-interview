@@ -6,7 +6,9 @@ export default function VideoMock({ isRecording }) {
     <div className="bg-white rounded-2xl shadow-lg p-6 sm:p-8">
       <div className="flex items-center gap-2 mb-4">
         <Video className="w-5 h-5 text-gray-700" />
-        <h3 className="text-lg font-semibold text-gray-900">Video Preview</h3>
+        <h3 className="text-lg font-semibold text-gray-900">
+          Live Preview — Make Sure You Don't Have Food on Your Face
+        </h3>
       </div>
 
       {/* Video Placeholder */}
@@ -26,7 +28,9 @@ export default function VideoMock({ isRecording }) {
 
         {/* Mock Label */}
         <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/50 backdrop-blur-sm px-4 py-2 rounded-full">
-          <span className="text-white text-sm font-medium">Webcam Preview (Mock)</span>
+          <span className="text-white text-sm font-medium">
+            Mock Preview: This Is Not You....Yet
+          </span>
         </div>
       </div>
 

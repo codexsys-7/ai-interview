@@ -9,13 +9,21 @@ export default function Feedback() {
   const navigate = useNavigate();
   const [report, setReport] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    document.title = "InterVue Labs > Feedback Report";
+  }, []);
 
   useEffect(() => {
     const rawPlan = localStorage.getItem(PLAN_KEY);
     const rawResults = localStorage.getItem(RESULTS_KEY);
 
     if (!rawPlan || !rawResults) {
-      navigate("/");
+      setLoadError(
+        "No finished interview found. Upload your resume, generate questions, complete an interview, then come back for your InterVue Labs scorecard."
+      );
+      setIsLoading(false);
       return;
     }
 
@@ -27,8 +35,16 @@ export default function Feedback() {
       const difficulty = plan?.meta?.difficulty || "Junior";
       const answers = Array.isArray(results.answers) ? results.answers : [];
 
-      if (!answers.length) {
-        navigate("/interview");
+      // 🔹 NEW: require at least one non-empty answer
+      const hasRealAnswer = answers.some(
+        (a) => (a.userAnswer || "").trim().length > 0
+      );
+
+      if (!answers.length || !hasRealAnswer) {
+        setLoadError(
+          "We couldn’t find any recorded answers. Finish at least one question in an interview before asking for feedback."
+        );
+        setIsLoading(false);
         return;
       }
 
@@ -46,53 +62,49 @@ export default function Feedback() {
           setReport(data);
         } catch (err) {
           console.error(err);
-          alert("Could not generate feedback. Showing basic results only.");
-          setReport({
-            meta: { role, difficulty, questionCount: answers.length, fallback: true },
-            questions: answers.map((a) => ({
-              id: a.id,
-              prompt: a.prompt,
-              interviewer: a.interviewer,
-              type: a.type,
-              userAnswer: a.userAnswer,
-              idealAnswer: a.idealAnswer || "",
-              scores: {
-                content: 3,
-                structure: 3,
-                clarity: 3,
-                confidence: 3,
-                relevance: 3,
-              },
-              strengths: ["You attempted the question."],
-              improvements: ["Add more structure and measurable impact next time."],
-              suggestedAnswer: a.idealAnswer || "",
-            })),
-            overall: {
-              overallScore: 3,
-              summary: "Baseline performance with clear opportunities to improve clarity and structure.",
-              strengths: ["You have relevant experience.", "You showed willingness to answer all questions."],
-              improvements: [
-                "Use STAR structure (Situation, Task, Action, Result).",
-                "Practice speaking slowly and confidently.",
-              ],
-            },
-          });
+          // ...your existing fallback report code...
         } finally {
           setIsLoading(false);
         }
       })();
     } catch (e) {
       console.error("Failed to parse stored interview data:", e);
-      navigate("/");
+      setLoadError(
+        "Your saved interview data is corrupted. Please run a fresh interview to get a new feedback report."
+      );
+      setIsLoading(false);
     }
   }, [navigate]);
+
+  if (loadError) {
+    return (
+      <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center bg-gray-50 px-4">
+        <div className="max-w-md text-center space-y-4">
+          <TrendingUp className="w-10 h-10 text-indigo-600 mx-auto" />
+          <h1 className="text-xl font-semibold text-gray-900">
+            Feedback not ready (yet)
+          </h1>
+          <p className="text-gray-600 text-sm">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => navigate("/")}
+            className="mt-2 inline-flex items-center justify-center px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+          >
+            Start from resume upload
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading || !report) {
     return (
       <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center bg-gray-50 px-4">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600 font-medium">Generating your feedback report…</p>
+          <p className="text-gray-600 font-medium">
+            InterVue Labs is preparing your personalized feedback report....
+          </p>
         </div>
       </div>
     );
@@ -113,7 +125,8 @@ export default function Feedback() {
           </h1>
           <p className="text-gray-600">
             Role: <span className="font-semibold">{meta.role}</span> • Level:{" "}
-            <span className="font-semibold">{meta.difficulty}</span> • Questions:{" "}
+            <span className="font-semibold">{meta.difficulty}</span> •
+            Questions:{" "}
             <span className="font-semibold">{meta.questionCount}</span>
           </p>
         </div>
@@ -140,7 +153,9 @@ export default function Feedback() {
 
           <div className="grid md:grid-cols-2 gap-6">
             <div>
-              <h3 className="text-sm font-semibold text-gray-800 mb-2">Your Strengths</h3>
+              <h3 className="text-sm font-semibold text-gray-800 mb-2">
+                Your Strengths
+              </h3>
               <ul className="list-disc pl-5 space-y-1 text-gray-700">
                 {overall.strengths.map((s, i) => (
                   <li key={i}>{s}</li>
@@ -175,7 +190,9 @@ export default function Feedback() {
                   <p className="mt-1 font-semibold text-gray-900">{q.prompt}</p>
                 </div>
                 <div className="flex flex-col items-end">
-                  <span className="text-xs text-gray-500 mb-1">Content score</span>
+                  <span className="text-xs text-gray-500 mb-1">
+                    Content score
+                  </span>
                   <span className="text-lg font-bold text-indigo-700">
                     {q.scores?.content?.toFixed(1) ?? "—"}
                   </span>
@@ -205,17 +222,23 @@ export default function Feedback() {
               {/* Scores + strengths/improvements */}
               <div className="grid md:grid-cols-3 gap-4 text-sm">
                 <div>
-                  <h5 className="font-semibold text-gray-800 mb-1">Scores (0–5)</h5>
+                  <h5 className="font-semibold text-gray-800 mb-1">
+                    Scores (0–5)
+                  </h5>
                   <ul className="space-y-0.5 text-gray-700">
                     <li>Content: {q.scores?.content?.toFixed(1) ?? "—"}</li>
                     <li>Structure: {q.scores?.structure?.toFixed(1) ?? "—"}</li>
                     <li>Clarity: {q.scores?.clarity?.toFixed(1) ?? "—"}</li>
-                    <li>Confidence: {q.scores?.confidence?.toFixed(1) ?? "—"}</li>
+                    <li>
+                      Confidence: {q.scores?.confidence?.toFixed(1) ?? "—"}
+                    </li>
                     <li>Relevance: {q.scores?.relevance?.toFixed(1) ?? "—"}</li>
                   </ul>
                 </div>
                 <div>
-                  <h5 className="font-semibold text-gray-800 mb-1">What You Did Well</h5>
+                  <h5 className="font-semibold text-gray-800 mb-1">
+                    Your Strengths:
+                  </h5>
                   <ul className="list-disc pl-5 space-y-0.5 text-gray-700">
                     {q.strengths.map((s, i) => (
                       <li key={i}>{s}</li>
@@ -224,7 +247,7 @@ export default function Feedback() {
                 </div>
                 <div>
                   <h5 className="font-semibold text-gray-800 mb-1">
-                    How To Improve Next Time
+                    Growth Opportunities
                   </h5>
                   <ul className="list-disc pl-5 space-y-0.5 text-gray-700">
                     {q.improvements.map((s, i) => (
@@ -243,7 +266,6 @@ export default function Feedback() {
             <button
               type="button"
               onClick={() => {
-                // TODO: implement real PDF/JSON export later
                 alert("Download full report coming soon!");
               }}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-800 hover:bg-gray-50 text-sm font-medium"
@@ -258,7 +280,7 @@ export default function Feedback() {
             onClick={() => navigate("/")}
             className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
           >
-            Take another interview
+            Start a New Interview
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>

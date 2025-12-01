@@ -33,7 +33,9 @@ export default function InterviewerPanel({
           <div className="mx-auto w-20 h-20 rounded-full bg-white/10 border border-white/20 flex items-center justify-center mb-3">
             <UserCircle2 className="w-10 h-10 text-white/80" />
           </div>
-          <p className="text-white/80 text-sm">Avatar space (coming soon)</p>
+          <p className="text-white/80 text-sm">
+            Avatar panel - arriving soon with fully animated interviewers.
+          </p>
         </div>
       </div>
 
