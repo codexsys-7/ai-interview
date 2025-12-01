@@ -1,10 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 
-/**
- * Props:
- * - analyser: AnalyserNode | null
- * - height?: number
- */
 export default function WaveformCanvas({ analyser, height = 120 }) {
   const canvasRef = useRef(null);
   const rafRef = useRef(null);

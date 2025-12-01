@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Fragment } from "react";
-export default function ProgressSteps({ totalSteps, currentStep, onStepClick }) {
+export default function ProgressSteps({
+  totalSteps,
+  currentStep,
+  onStepClick,
+}) {
   return (
     <div className="bg-white rounded-2xl shadow-lg p-6">
       <div className="flex items-center justify-between">

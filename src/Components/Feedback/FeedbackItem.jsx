@@ -1,5 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { ChevronDown, ChevronUp, User, Lightbulb, Target, Award } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  User,
+  Lightbulb,
+  Target,
+  Award,
+} from "lucide-react";
 
 export default function FeedbackItem({ feedback }) {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -35,11 +42,11 @@ export default function FeedbackItem({ feedback }) {
       {/* Content */}
       {isExpanded && (
         <div className="p-6 space-y-6">
-          {/* Your Answer */}
+          {/* Your Response */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <User className="w-5 h-5 text-blue-600" />
-              <h4 className="font-semibold text-gray-900">Your Answer</h4>
+              <h4 className="font-semibold text-gray-900">Your Response</h4>
             </div>
             <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-gray-700">
               {feedback.yourAnswer}
@@ -50,7 +57,9 @@ export default function FeedbackItem({ feedback }) {
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Target className="w-5 h-5 text-green-600" />
-              <h4 className="font-semibold text-gray-900">Ideal Answer</h4>
+              <h4 className="font-semibold text-gray-900">
+                Recommended Strong Answer....
+              </h4>
             </div>
             <div className="bg-green-50 border border-green-100 rounded-lg p-4 text-gray-700">
               {feedback.idealAnswer}
@@ -61,7 +70,9 @@ export default function FeedbackItem({ feedback }) {
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Lightbulb className="w-5 h-5 text-amber-600" />
-              <h4 className="font-semibold text-gray-900">What Can Be Improved</h4>
+              <h4 className="font-semibold text-gray-900">
+                Key areas to improve....
+              </h4>
             </div>
             <ul className="space-y-2">
               {feedback.improvements.map((improvement, index) => (
@@ -83,7 +94,9 @@ export default function FeedbackItem({ feedback }) {
               {Object.entries(feedback.scores).map(([key, value]) => (
                 <div
                   key={key}
-                  className={`px-4 py-2 rounded-lg border font-medium ${getScoreColor(value)}`}
+                  className={`px-4 py-2 rounded-lg border font-medium ${getScoreColor(
+                    value
+                  )}`}
                 >
                   {key.charAt(0).toUpperCase() + key.slice(1)}: {value}/5
                 </div>

@@ -32,7 +32,11 @@ export default function UserCameraPanel({
             }`}
             title={isMicOn ? "Mic on" : "Mic off"}
           >
-            {isMicOn ? <Mic className="w-4 h-4 inline" /> : <MicOff className="w-4 h-4 inline" />}
+            {isMicOn ? (
+              <Mic className="w-4 h-4 inline" />
+            ) : (
+              <MicOff className="w-4 h-4 inline" />
+            )}
             <span className="ml-1">{isMicOn ? "Mic On" : "Mic Off"}</span>
           </button>
 
@@ -51,7 +55,9 @@ export default function UserCameraPanel({
             ) : (
               <CameraOff className="w-4 h-4 inline" />
             )}
-            <span className="ml-1">{isCameraOn ? "Camera On" : "Camera Off"}</span>
+            <span className="ml-1">
+              {isCameraOn ? "Camera On" : "Camera Off"}
+            </span>
           </button>
         </div>
       </div>
@@ -62,7 +68,9 @@ export default function UserCameraPanel({
             <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4">
               <div className="flex items-center gap-2 justify-center mb-2">
                 <AlertTriangle className="w-5 h-5" />
-                <span className="font-semibold">Permission needed</span>
+                <span className="font-semibold">
+                  Camera & Mic Access Required
+                </span>
               </div>
               <p className="text-sm">{permissionError}</p>
             </div>
@@ -79,10 +87,16 @@ export default function UserCameraPanel({
         <div className="absolute top-3 left-3 flex items-center gap-2 text-xs">
           <span
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${
-              isCameraOn ? "bg-indigo-600 text-white" : "bg-gray-300 text-gray-800"
+              isCameraOn
+                ? "bg-indigo-600 text-white"
+                : "bg-gray-300 text-gray-800"
             }`}
           >
-            {isCameraOn ? <Camera className="w-3.5 h-3.5" /> : <CameraOff className="w-3.5 h-3.5" />}
+            {isCameraOn ? (
+              <Camera className="w-3.5 h-3.5" />
+            ) : (
+              <CameraOff className="w-3.5 h-3.5" />
+            )}
             {isCameraOn ? "Camera" : "Camera off"}
           </span>
           <span
@@ -90,7 +104,11 @@ export default function UserCameraPanel({
               isMicOn ? "bg-green-600 text-white" : "bg-gray-300 text-gray-800"
             }`}
           >
-            {isMicOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+            {isMicOn ? (
+              <Mic className="w-3.5 h-3.5" />
+            ) : (
+              <MicOff className="w-3.5 h-3.5" />
+            )}
             {isMicOn ? "Mic" : "Mic off"}
           </span>
         </div>
