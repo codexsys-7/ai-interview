@@ -1,16 +1,147 @@
-# React + Vite
+# InterVue Labs — Initial MVP Cleanup & Code Refactor Summary
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This update finalizes the Initial MVP for the InterVue Labs AI Interview Simulator.
+We performed a complete cleanup, structural re-organization, and bug-fix pass to prepare the project for public testing and future feature releases.
 
-Currently, two official plugins are available:
+## 🔧 Core Improvements
+### 1. Full File Cleanup & Refactoring
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Removed unused components, placeholder code, and legacy mocks.
 
-## React Compiler
+Consolidated repeated logic into cleaner React hooks and reusable functions.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Improved folder structure for Components / Pages / Upload / Interview / Feedback.
 
-## Expanding the ESLint configuration
+Added clear separation between UI logic, state, and API interactions.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### 2. Resume Parsing Flow
+
+Removed hardcoded mock resume parsing values.
+
+Connected the Resume Parser to the actual FastAPI backend (OpenAI-powered).
+
+Implemented clean error states:
+
+No resume uploaded
+
+Resume parsing failed
+
+Invalid or empty extracted content
+
+Disabled access to Resume Analysis, Interview, and Feedback when no resume exists.
+
+### 🎙️ 3. Interview System Enhancements
+
+Added safe page redirection:
+
+Users cannot start Interview or view Feedback without uploading a resume first.
+
+Fully cleaned & fixed Interview flow:
+
+Think timer (3 seconds)
+
+Automatic mic start after thinking
+
+Question read-out (TTS)
+
+Start/Stop recording handlers
+
+Transcript cleaning (removes "I don’t know why" junk)
+
+Prevented browser camera/mic from activating before permissions are valid.
+
+Added automatic camera/mic shutdown when user ends interview.
+
+### 🎥 4. Camera & Microphone Handling
+
+No more auto-activation of camera/mic before permissions.
+
+Camera + mic are now requested only when a valid interview plan exists.
+
+Stream and tracks are fully cleaned when:
+
+user ends the interview
+
+component unmounts
+
+user navigates away
+
+### 🧭 5. Navigation & UX
+
+Removed top-level breadcrumb system.
+
+Added clean page-specific browser titles using useEffect.
+
+Removed unnecessary nav bar clutter; simplified design.
+
+Homepage Upload section repositioned for better UI balance.
+
+### 🧪 6. Error Boundaries & Stability
+
+Global ErrorBoundary added to catch unexpected UI crashes.
+
+Clear fallback screens for:
+
+Missing interview plan
+
+Missing feedback results
+
+Parsing errors
+
+Invalid state transitions
+
+### ✨ 7. Branding & Visual Improvements
+
+Updated branding across all pages:
+
+New app name: InterVue Labs
+
+Tagline: Humanlike Interview Simulation
+
+Replaced generic Sparkles icon with branded custom icon support.
+
+Cleaned colors, spacing, shadows, and overall UI consistency.
+
+### 📦 8. File Storage & Local State Management
+
+Centralized all runtime data in localStorage keys:
+
+parsedResumeData
+
+interviewPlan
+
+interviewResults
+
+Added automatic cleanup on entering Home page to prevent stale data flow.
+
+Removed accidental auto-loading of old results.
+
+### 🧼 9. General Cleanup & Minor Fixes
+
+Removed all console spam logs.
+
+Cleaned transcript buffering logic.
+
+Ensured buttons are fully disabled when not usable (Next, Repeat, etc.).
+
+Improved wording across UI components (fun, humanlike tone).
+
+Fixed Next Question bug caused by missing variable (answers undefined).
+
+Fixed Resume Upload slow render issue (useEffect import missing).
+
+## 🎉 Initial MVP is Now Production-Ready for Testing
+
+This refactor stabilizes the entire product, removes all major bugs, and sets up a rock-solid foundation for:
+
+Speech scoring
+
+Answer evaluation
+
+Multi-role interviews
+
+Dashboard analytics
+
+User accounts
+
+Database integration (SQLite → PostgreSQL)
