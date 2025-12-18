@@ -1,22 +1,13 @@
 // This is my Final Version working on MVP.
 
-import { useState, useEffect, useRef, useMemo } from "react";
-import {
-  Timer,
-  RotateCcw,
-  Mic,
-  Square,
-  ChevronRight,
-  Flag,
-} from "lucide-react";
+import { Timer, RotateCcw, ChevronRight, Flag, Mic } from "lucide-react";
 
 export default function ControlBar({
   isRecording,
+  isTranscribing,
   canRepeat,
   canGoNext,
   onStartThinkTime,
-  onStartRecording,
-  onStopRecording,
   onRepeatQuestion,
   onNextQuestion,
   onEndInterview,
@@ -34,7 +25,7 @@ export default function ControlBar({
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-gray-700 hover:bg-gray-50"
             title={
               showThinkTime
-                ? "Thinking time in progress...."
+                ? "Thinking time in progress…"
                 : "Start a 5-second prep timer."
             }
           >
@@ -58,26 +49,25 @@ export default function ControlBar({
           </button>
         </div>
 
-        {/* Center mic controls */}
-        <div className="flex items-center gap-2">
-          {!isRecording ? (
-            <button
-              type="button"
-              onClick={onStartRecording}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
-            >
-              <Mic className="w-4 h-4" />
-              Start Recording
-            </button>
+        {/* Center status (no Start/Stop buttons anymore) */}
+        <div className="flex items-center gap-2 text-sm">
+          {isRecording ? (
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-700">
+              <Mic className="w-3 h-3" />
+              Recording your answer…
+            </span>
+          ) : isTranscribing ? (
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-700">
+              Transcribing your answer…
+            </span>
+          ) : transcript ? (
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700">
+              Answer saved
+            </span>
           ) : (
-            <button
-              type="button"
-              onClick={onStopRecording}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600 text-white hover:bg-rose-700"
-            >
-              <Square className="w-4 h-4" />
-              Stop
-            </button>
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gray-50 border border-gray-200 text-gray-600">
+              Ready for the next question
+            </span>
           )}
         </div>
 
@@ -86,9 +76,9 @@ export default function ControlBar({
           <button
             type="button"
             onClick={onNextQuestion}
-            disabled={!canGoNext}
+            disabled={!canGoNext || isTranscribing}
             className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg border ${
-              canGoNext
+              canGoNext && !isTranscribing
                 ? "text-gray-700 hover:bg-gray-50"
                 : "text-gray-400 cursor-not-allowed"
             }`}
@@ -100,7 +90,10 @@ export default function ControlBar({
           <button
             type="button"
             onClick={onEndInterview}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700"
+            disabled={isTranscribing}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700 ${
+              isTranscribing ? "opacity-60 cursor-not-allowed" : ""
+            }`}
           >
             <Flag className="w-4 h-4" />
             End Interview
@@ -111,7 +104,9 @@ export default function ControlBar({
       {/* tiny status row */}
       <div className="text-xs text-gray-500 mt-2 px-1">
         {isRecording
-          ? "Recording....Capturing your response in real time."
+          ? "Recording… speak clearly."
+          : isTranscribing
+          ? "Transcribing your answer…"
           : transcript
           ? "Transcript locked in."
           : "Ready."}
