@@ -29,6 +29,8 @@ const HARD_DEFAULT_ROLES = [
 ];
 
 const PLAN_KEY = "interviewPlan";
+const JD_KEY = "jobDescriptionText";
+const jdText = (localStorage.getItem(JD_KEY) || "").trim();
 
 const questionCountFor = (difficulty) =>
   difficulty === "Senior"
@@ -188,7 +190,14 @@ export default function ResumeAnalysis() {
   const handleStartInterview = async () => {
     try {
       setPreparing(true); // show loader overlay
-      const settings = { role, difficulty, interviewers: selectedInterviewers };
+      const settings = {
+        role,
+        difficulty,
+        interviewers: selectedInterviewers,
+        skills: resumeData.skills || [],
+        keywords: resumeData.keywords || [],
+        jobDescription: jdText.length >= 40 ? jdText : null,
+      };
       const count =
         difficulty === "Senior"
           ? 26
@@ -203,6 +212,7 @@ export default function ResumeAnalysis() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...settings, count }),
       });
+
       if (!res.ok) throw new Error("Failed to generate questions");
       const plan = await res.json();
 

@@ -6,3 +6,5 @@ python-docx      # DOCX text extraction
 pydantic
 openai>=1.40.0   # new SDK. 
 assemblyai
+sqlmodel
+psycopg2-binary

@@ -71,6 +71,9 @@ export default function Interview() {
   // ----- Results we’ll save for feedback -----
   const [answers, setAnswers] = useState([]);
 
+  // What to do after transcription finishes: "next" | "end" | null
+  const pendingNavRef = useRef(null);
+
   useEffect(() => {
     document.title = "InterVue Labs > Interview";
   }, []);
@@ -309,6 +312,9 @@ export default function Interview() {
       };
 
       mr.onstop = async () => {
+        setIsTranscribing(true);
+        let cleaned = "";
+
         try {
           const blob = new Blob(recordedChunksRef.current, {
             type: "audio/webm",
@@ -317,7 +323,6 @@ export default function Interview() {
 
           if (!blob || blob.size === 0) {
             setTranscript("No audio detected. Please try again.");
-            setIsTranscribing(false);
             return;
           }
 
@@ -334,7 +339,7 @@ export default function Interview() {
           }
 
           const data = await res.json();
-          const cleaned = cleanTranscript(data.transcript || "");
+          cleaned = cleanTranscript(data.transcript || "");
           setTranscript(cleaned);
         } catch (err) {
           console.error("Transcription failed:", err);
@@ -343,6 +348,18 @@ export default function Interview() {
           );
         } finally {
           setIsTranscribing(false);
+        }
+
+        // After transcription finishes, decide where to go
+        const action = pendingNavRef.current;
+        pendingNavRef.current = null;
+
+        const merged = buildAnswersWithCurrent(cleaned);
+
+        if (action === "next") {
+          advanceToNextQuestion(merged);
+        } else if (action === "end") {
+          finalizeAndExitInterview(merged);
         }
       };
 
@@ -385,9 +402,9 @@ export default function Interview() {
   };
 
   // ------------ Save current answer into state ------------
-  const buildAnswersWithCurrent = () => {
+  const buildAnswersWithCurrent = (answerOverride) => {
     if (!q) return answers;
-    const userAnswer = (transcript || "").trim();
+    const userAnswer = (answerOverride ?? transcript ?? "").trim();
 
     const entry = {
       id: q.id,
@@ -410,6 +427,11 @@ export default function Interview() {
   // ------------ Think-time when question changes ------------
   useEffect(() => {
     if (!q) return;
+    if (!streamRef.current) {
+      // Wait until mic/camera stream is ready
+      return;
+    }
+
     setShowThinkTime(true);
     setThinkTimeLeft(3);
     setRepeatCount(0);
@@ -423,7 +445,7 @@ export default function Interview() {
         recognitionRef.current.stop();
       } catch {}
     }
-  }, [q?.id]);
+  }, [q?.id, stream]);
 
   useEffect(() => {
     if (!showThinkTime) return;
@@ -459,67 +481,34 @@ export default function Interview() {
    * - Resets transcript + think time state
    */
 
-  const handleNext = () => {
+  const advanceToNextQuestion = (mergedAnswers) => {
     if (!plan || !q) return;
-
-    // merge current answer into answers[]
-    const merged = buildAnswersWithCurrent();
 
     const totalQuestions = plan.questions.length;
 
     if (currentIdx + 1 < totalQuestions) {
-      // Go to the next question
       setCurrentIdx((i) => i + 1);
       setTranscript("");
-
-      // Optional: keep state in sync, though buildAnswersWithCurrent already calls setAnswers
-      setAnswers(merged);
+      setAnswers(mergedAnswers);
 
       // Reset think time for the next question
       setShowThinkTime(true);
       setThinkTimeLeft(3);
       setRepeatCount(0);
 
-      // Make sure we’re not still recording
       try {
         recognitionRef.current?.stop();
       } catch {}
       setIsRecording(false);
 
-      // Scroll to top
       window.scrollTo({ top: 0, behavior: "smooth" });
     } else {
       // If somehow called on last question, just end interview
-      handleEndInterview();
+      finalizeAndExitInterview(mergedAnswers);
     }
   };
 
-  /**
-   * End the interview and go to feedback page.
-   * - Stops STT
-   * - Merges current answer
-   * - Saves to localStorage
-   * - Navigates to /feedback
-   */
-
-  const handleEndInterview = () => {
-    // Stop any ongoing STT / recording
-    try {
-      recognitionRef.current?.stop();
-    } catch {}
-    try {
-      if (
-        mediaRecorderRef.current &&
-        mediaRecorderRef.current.state !== "inactive"
-      ) {
-        mediaRecorderRef.current.stop();
-      }
-    } catch (e) {
-      console.warn("MediaRecorder stop error on end:", e);
-    }
-    setIsRecording(false);
-    setIsTranscribing(false);
-
+  const finalizeAndExitInterview = (mergedAnswers) => {
     // Hard-stop camera + mic and audio graph
     try {
       if (streamRef.current) {
@@ -540,23 +529,58 @@ export default function Interview() {
     audioContextRef.current = null;
     analyserRef.current = null;
 
-    // If no valid plan, just bounce back to resume analysis
     if (!plan) {
       navigate("/resume-analysis");
       return;
     }
 
-    // Save final answers payload for feedback page
-    const merged = buildAnswersWithCurrent();
-
     const payload = {
       meta: plan.meta || {},
-      answers: merged,
+      answers: mergedAnswers,
     };
 
     localStorage.setItem(RESULTS_KEY, JSON.stringify(payload));
-
     navigate("/feedback");
+  };
+
+  const handleNext = () => {
+    if (!plan || !q) return;
+
+    // If we are still recording, stop, then move to next after STT
+    if (isRecording) {
+      pendingNavRef.current = "next";
+      stopRecording();
+      return;
+    }
+
+    // Not recording: just use current transcript
+    const merged = buildAnswersWithCurrent();
+    advanceToNextQuestion(merged);
+  };
+
+  /**
+   * End the interview and go to feedback page.
+   * - Stops STT
+   * - Merges current answer
+   * - Saves to localStorage
+   * - Navigates to /feedback
+   */
+
+  const handleEndInterview = () => {
+    if (!plan || !q) {
+      navigate("/resume-analysis");
+      return;
+    }
+
+    // If still recording, stop first, then finish after STT
+    if (isRecording) {
+      pendingNavRef.current = "end";
+      stopRecording();
+      return;
+    }
+
+    const merged = buildAnswersWithCurrent();
+    finalizeAndExitInterview(merged);
   };
 
   if (loadError) {
@@ -650,8 +674,6 @@ export default function Interview() {
             setThinkTimeLeft(3);
             speak(q.prompt);
           }}
-          onStartRecording={startRecording}
-          onStopRecording={stopRecording}
           onRepeatQuestion={handleRepeat}
           onNextQuestion={handleNext}
           onEndInterview={handleEndInterview}

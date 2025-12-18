@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FileText, TrendingUp, ArrowRight, Download } from "lucide-react";
 
 const PLAN_KEY = "interviewPlan";
 const RESULTS_KEY = "interviewResults";
+const JD_KEY = "jobDescriptionText";
 
 export default function Feedback() {
   const navigate = useNavigate();
@@ -11,14 +12,22 @@ export default function Feedback() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
+  const hasScoredRef = useRef(false);
+
+  // Page title
   useEffect(() => {
     document.title = "InterVue Labs > Feedback Report";
   }, []);
 
+  // Load plan + results and call backend
   useEffect(() => {
+    if (hasScoredRef.current) return; // stops second execution
+    hasScoredRef.current = true;
+
     const rawPlan = localStorage.getItem(PLAN_KEY);
     const rawResults = localStorage.getItem(RESULTS_KEY);
 
+    // No interview completed
     if (!rawPlan || !rawResults) {
       setLoadError(
         "No finished interview found. Upload your resume, generate questions, complete an interview, then come back for your InterVue Labs scorecard."
@@ -27,55 +36,117 @@ export default function Feedback() {
       return;
     }
 
+    let plan, results;
+    // Safely parse JSON
     try {
-      const plan = JSON.parse(rawPlan);
-      const results = JSON.parse(rawResults);
-
-      const role = plan?.meta?.role || "Candidate";
-      const difficulty = plan?.meta?.difficulty || "Junior";
-      const answers = Array.isArray(results.answers) ? results.answers : [];
-
-      // 🔹 NEW: require at least one non-empty answer
-      const hasRealAnswer = answers.some(
-        (a) => (a.userAnswer || "").trim().length > 0
-      );
-
-      if (!answers.length || !hasRealAnswer) {
-        setLoadError(
-          "We couldn’t find any recorded answers. Finish at least one question in an interview before asking for feedback."
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      (async () => {
-        try {
-          setIsLoading(true);
-          const res = await fetch("http://127.0.0.1:8000/api/score-interview", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ role, difficulty, answers }),
-          });
-
-          if (!res.ok) throw new Error("Failed to score interview");
-          const data = await res.json();
-          setReport(data);
-        } catch (err) {
-          console.error(err);
-          // ...your existing fallback report code...
-        } finally {
-          setIsLoading(false);
-        }
-      })();
+      plan = JSON.parse(rawPlan);
+      results = JSON.parse(rawResults);
     } catch (e) {
       console.error("Failed to parse stored interview data:", e);
       setLoadError(
         "Your saved interview data is corrupted. Please run a fresh interview to get a new feedback report."
       );
       setIsLoading(false);
+      return;
     }
+
+    const role = plan?.meta?.role || "Candidate";
+    const difficulty = plan?.meta?.difficulty || "Junior";
+    const answers = Array.isArray(results.answers) ? results.answers : [];
+
+    const jdText = (localStorage.getItem(JD_KEY) || "").trim();
+
+    // Require at least one non-empty answer
+    const hasRealAnswer = answers.some(
+      (a) => (a.userAnswer || "").trim().length > 0
+    );
+
+    if (!answers.length || !hasRealAnswer) {
+      setLoadError(
+        "We couldn’t find any recorded answers. Finish at least one question in an interview before asking for feedback."
+      );
+      setIsLoading(false);
+      return;
+    }
+
+    // Call backend to score + (optionally) save to DB
+    (async () => {
+      try {
+        setIsLoading(true);
+
+        const res = await fetch("http://127.0.0.1:8000/api/score-interview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // 👇 plan is sent as well so backend has full context
+          body: JSON.stringify({
+            role,
+            difficulty,
+            answers,
+            plan,
+            jobDescription: jdText.length >= 40 ? jdText : null,
+          }),
+        });
+
+        if (!res.ok) throw new Error("Failed to score interview");
+
+        const data = await res.json();
+        setReport(data);
+      } catch (err) {
+        console.error("Scoring API failed, using fallback report:", err);
+
+        // Fallback basic report if API is down or errors out
+        setReport({
+          meta: {
+            role,
+            difficulty,
+            questionCount: answers.length,
+            fallback: true,
+          },
+          questions: answers.map((a) => ({
+            id: a.id,
+            prompt: a.prompt,
+            interviewer: a.interviewer,
+            type: a.type,
+            userAnswer: a.userAnswer,
+            idealAnswer: a.idealAnswer || "",
+            scores: {
+              content: 3,
+              structure: 3,
+              clarity: 3,
+              confidence: 3,
+              relevance: 3,
+            },
+            strengths: [
+              "You stayed engaged and tried to answer every question – that already puts you ahead.",
+            ],
+            improvements: [
+              "Use a clear beginning–middle–end (STAR: Situation, Task, Action, Result).",
+              "Add 1–2 concrete metrics to show impact.",
+            ],
+            suggestedAnswer: a.idealAnswer || "",
+          })),
+          overall: {
+            overallScore: 3,
+            summary:
+              "Promising baseline. With more structure, clarity, and metrics, you can sound very strong.",
+            strengths: [
+              "You consistently tried to address each question.",
+              "You have relevant experience you can build into strong stories.",
+            ],
+            improvements: [
+              "Practice using STAR structure (Situation, Task, Action, Result).",
+              "Add 1–2 numbers (%, $, time saved) to each story.",
+              "Slow down and pause between points to sound more confident.",
+            ],
+          },
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    })();
   }, [navigate]);
 
+  // Error state: no data / corrupted / no answers
   if (loadError) {
     return (
       <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center bg-gray-50 px-4">
@@ -97,6 +168,7 @@ export default function Feedback() {
     );
   }
 
+  // Loading spinner
   if (isLoading || !report) {
     return (
       <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center bg-gray-50 px-4">
@@ -260,7 +332,7 @@ export default function Feedback() {
           ))}
         </div>
 
-        {/* Bottom actions: download only + start next interview */}
+        {/* Bottom actions */}
         <div className="flex flex-wrap justify-between items-center gap-4 pt-4 border-t border-gray-200">
           <div className="flex gap-3">
             <button
