@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FileText, TrendingUp, ArrowRight, Download } from "lucide-react";
 
+// These Imports are for the feedback report downloading(PDF)
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+
 const PLAN_KEY = "interviewPlan";
 const RESULTS_KEY = "interviewResults";
 const JD_KEY = "jobDescriptionText";
@@ -184,6 +188,153 @@ export default function Feedback() {
 
   const { meta, questions, overall } = report;
 
+  const handleDownloadPDF = () => {
+    if (!report) {
+      alert("No feedback report found to download.");
+      return;
+    }
+
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    const meta = report.meta || {};
+    const overall = report.overall || {};
+    const questions = Array.isArray(report.questions) ? report.questions : [];
+
+    const title = "InterVue Labs — Interview Feedback Report";
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text(title, pageWidth / 2, 40, { align: "center" });
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+
+    const role = meta.role || "Candidate";
+    const difficulty = meta.difficulty || "Junior";
+    const qCount = meta.questionCount || questions.length || 0;
+
+    const now = new Date();
+    const dateStr = now.toLocaleString();
+
+    doc.text(`Role: ${role}`, 40, 70);
+    doc.text(`Difficulty: ${difficulty}`, 40, 88);
+    doc.text(`Questions: ${qCount}`, 40, 106);
+    doc.text(`Generated: ${dateStr}`, 40, 124);
+
+    // Overall score + summary
+    const overallScore = overall.overallScore ?? "N/A";
+    const summary = overall.summary || "";
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text(`Overall Score: ${overallScore}/5`, 40, 155);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+
+    const wrapSummary = doc.splitTextToSize(
+      `Summary: ${summary}`,
+      pageWidth - 80
+    );
+    doc.text(wrapSummary, 40, 175);
+
+    let y = 175 + wrapSummary.length * 14 + 10;
+
+    // Strengths / Improvements lists
+    const strengths = Array.isArray(overall.strengths) ? overall.strengths : [];
+    const improvements = Array.isArray(overall.improvements)
+      ? overall.improvements
+      : [];
+
+    if (strengths.length) {
+      doc.setFont("helvetica", "bold");
+      doc.text("Key Strengths", 40, y);
+      y += 16;
+      doc.setFont("helvetica", "normal");
+      strengths.slice(0, 6).forEach((s) => {
+        const lines = doc.splitTextToSize(`• ${s}`, pageWidth - 80);
+        doc.text(lines, 40, y);
+        y += lines.length * 14;
+      });
+      y += 8;
+    }
+
+    if (improvements.length) {
+      doc.setFont("helvetica", "bold");
+      doc.text("Top Improvements", 40, y);
+      y += 16;
+      doc.setFont("helvetica", "normal");
+      improvements.slice(0, 6).forEach((s) => {
+        const lines = doc.splitTextToSize(`• ${s}`, pageWidth - 80);
+        doc.text(lines, 40, y);
+        y += lines.length * 14;
+      });
+      y += 8;
+    }
+
+    // Questions table
+    const rows = questions.map((q, idx) => {
+      const scores = q.scores || {};
+      const avg =
+        ["content", "structure", "clarity", "confidence", "relevance"]
+          .map((k) => Number(scores[k] ?? 0))
+          .reduce((a, b) => a + b, 0) / 5;
+
+      const scoreStr = isFinite(avg) && avg > 0 ? avg.toFixed(1) : "N/A";
+
+      const best =
+        Array.isArray(q.strengths) && q.strengths.length ? q.strengths[0] : "";
+      const improve =
+        Array.isArray(q.improvements) && q.improvements.length
+          ? q.improvements[0]
+          : "";
+
+      return [
+        String(idx + 1),
+        (q.prompt || "").slice(0, 140),
+        q.type || "",
+        q.interviewer || "",
+        scoreStr,
+        (q.userAnswer || "User answer not found").slice(0, 160),
+        (best || "").slice(0, 120),
+        (improve || "").slice(0, 120),
+      ];
+    });
+
+    autoTable(doc, {
+      startY: Math.min(y + 10, 700),
+      head: [
+        [
+          "#",
+          "Question",
+          "Type",
+          "Interviewer",
+          "Avg",
+          "User Answer",
+          "Strength",
+          "Improvement",
+        ],
+      ],
+      body: rows,
+      styles: { fontSize: 8, cellPadding: 4, overflow: "linebreak" },
+      headStyles: { fontStyle: "bold" },
+      columnStyles: {
+        0: { cellWidth: 18 },
+        1: { cellWidth: 120 },
+        2: { cellWidth: 45 },
+        3: { cellWidth: 60 },
+        4: { cellWidth: 28 },
+        5: { cellWidth: 120 },
+        6: { cellWidth: 80 },
+        7: { cellWidth: 80 },
+      },
+    });
+
+    const safeRole = String(role).replace(/[^a-z0-9-_]+/gi, "_");
+    const safeDiff = String(difficulty).replace(/[^a-z0-9-_]+/gi, "_");
+    doc.save(`InterVueLabs_Feedback_${safeRole}_${safeDiff}.pdf`);
+  };
+
   return (
     <div className="min-h-[calc(100vh-8rem)] bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-6xl mx-auto space-y-8">
@@ -336,14 +487,15 @@ export default function Feedback() {
         <div className="flex flex-wrap justify-between items-center gap-4 pt-4 border-t border-gray-200">
           <div className="flex gap-3">
             <button
-              type="button"
-              onClick={() => {
-                alert("Download full report coming soon!");
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-800 hover:bg-gray-50 text-sm font-medium"
+              onClick={handleDownloadPDF}
+              disabled={!report || isLoading}
+              className={`px-4 py-2 rounded-lg font-medium shadow-sm transition ${
+                !report || isLoading
+                  ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                  : "bg-indigo-600 text-white hover:bg-indigo-700"
+              }`}
             >
-              <Download className="w-4 h-4" />
-              Download Full Report
+              Download Your Report
             </button>
           </div>
 

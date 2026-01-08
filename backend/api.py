@@ -11,23 +11,27 @@ from typing import Any, Dict, List, Optional
 
 import fitz          
 import docx
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from openai import OpenAI
 from openai import RateLimitError
 
-from fastapi import Form
 from typing import Optional
 
 from dotenv import load_dotenv
 from pathlib import Path
 
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 from db import engine, init_db, InterviewSession
-from models import Resume
+from models import Resume, User
 
+from passlib.context import CryptContext
+from jose import jwt
+from datetime import datetime, timedelta
+
+from fastapi.middleware.cors import CORSMiddleware
 
 
 
@@ -40,12 +44,120 @@ load_dotenv(dotenv_path=env_path, override=True)
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):5173",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
+
+
+@app.options("/{path:path}")
+def preflight_handler(path: str):
+    return Response(status_code=200)
+
+
+@app.options("/{path:path}")
+def options_handler(path: str):
+    return Response(status_code=200)
+
+
+@app.get("/api/__debug")
+def debug():
+    return {
+        "ok": True,
+        "file": __file__,
+        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+    }
+
+
+
+# These are my Config + helpers
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+JWT_SECRET = os.getenv("JWT_SECRET", "dev_secret_change_me")
+JWT_ALG = "HS256"
+JWT_EXPIRE_MIN = 60 * 24 * 7  # 7 days
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return pwd_context.verify(password, password_hash)
+
+def create_access_token(user_id: str, email: str) -> str:
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "exp": datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MIN),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+class SignupReq(BaseModel):
+    full_name: str
+    email: EmailStr
+    password: str
+
+class LoginReq(BaseModel):
+    email: EmailStr
+    password: str
+
+class AuthResp(BaseModel):
+    token: str
+    user: dict
+
+
+# These are my Longin and Sign Up page Endpoints.
+@app.post("/api/auth/signup", response_model=AuthResp)
+def signup(req: SignupReq):
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+
+    # bcrypt limit: 72 bytes (not chars)
+    if len(req.password.encode("utf-8")) > 100:
+        raise HTTPException(status_code=400, detail="Password too long (max 100 bytes). Use a shorter password.")
+
+
+    with Session(engine) as session:
+        existing = session.exec(select(User).where(User.email == req.email.lower())).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered.")
+
+        user = User(
+            full_name=req.full_name.strip(),
+            email=req.email.lower().strip(),
+            password_hash=hash_password(req.password),
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        token = create_access_token(user.id, user.email)
+        return AuthResp(token=token, user={"id": user.id, "full_name": user.full_name, "email": user.email})
+
+
+@app.post("/api/auth/login", response_model=AuthResp)
+def login(req: LoginReq):
+    with Session(engine) as session:
+        user = session.exec(select(User).where(User.email == req.email.lower())).first()
+
+        if not user or not verify_password(req.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="Account disabled.")
+
+        token = create_access_token(user.id, user.email)
+        return AuthResp(token=token, user={"id": user.id, "full_name": user.full_name, "email": user.email})
+
+
+# This is a startup endpoint
 @app.on_event("startup")
 def on_startup():
     # Create tables if they do not exist

@@ -1,9 +1,8 @@
 # models.py
 from datetime import datetime
 from typing import Optional
-
 from sqlmodel import SQLModel, Field
-
+import uuid
 
 class Resume(SQLModel, table=True):
     """
@@ -24,3 +23,15 @@ class Resume(SQLModel, table=True):
 
     # We'll just store the full parsed JSON (skills, rare, atsSuggestions, etc.)
     raw_json: str
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    full_name: str
+    email: str = Field(index=True, unique=True)
+    password_hash: str
+    is_active: bool = Field(default=True)
