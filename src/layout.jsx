@@ -5,6 +5,7 @@ import { Link, NavLink, useLocation, Outlet } from "react-router-dom";
 import { Sparkles } from "lucide-react";
 import ErrorBoundary from "./Components/ErrorBoundary.jsx";
 import logo from "./assets/logo.png";
+import { useNavigate } from "react-router-dom";
 
 export default function Layout() {
   const location = useLocation();
@@ -15,15 +16,37 @@ export default function Layout() {
       ? "text-violet-700 bg-violet-50"
       : "text-gray-700 hover:text-violet-700");
 
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    localStorage.removeItem("authToken");
+    localStorage.removeItem("authUser");
+
+    // Optional: clean interview state
+    localStorage.removeItem("parsedResumeData");
+    localStorage.removeItem("interviewPlan");
+    localStorage.removeItem("interviewResults");
+
+    navigate("/login", { replace: true });
+  };
+
+  const user = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("authUser"));
+    } catch {
+      return null;
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <nav className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             {/* Left: brand */}
-            <Link to="/" className="flex items-center gap-2 group">
+            <Link to="/home" className="flex items-center gap-2 group">
               <img
-                src="src/assets/Logo.png"
+                src={logo}
                 alt="InterVue Labs Logo"
                 className="w-10 h-10 rounded-lg shadow-md group-hover:shadow-lg transition-shadow"
               />
@@ -39,9 +62,10 @@ export default function Layout() {
             <div className="flex items-center gap-6">
               {/* breadcrumb */}
               <div className="hidden md:block"></div>
+
               {/* links */}
               <nav className="flex items-center gap-3">
-                <NavLink to="/" className={linkClass} end>
+                <NavLink to="/home" className={linkClass} end>
                   Home
                 </NavLink>
                 <NavLink to="/resume-analysis" className={linkClass}>
@@ -53,6 +77,26 @@ export default function Layout() {
                 <NavLink to="/feedback" className={linkClass}>
                   Feedback
                 </NavLink>
+
+                {/* Logout */}
+                <button
+                  onClick={handleLogout}
+                  className="ml-2 px-3 py-1.5 rounded-md text-sm font-medium
+                          text-red-600 hover:bg-red-50 hover:text-red-700
+                          transition"
+                >
+                  Logout
+                </button>
+
+                {/* Logged in user */}
+                {user?.full_name && (
+                  <span className="text-sm text-gray-600 hidden sm:block">
+                    Logged in as{" "}
+                    <span className="font-semibold text-gray-800">
+                      {user.full_name}
+                    </span>
+                  </span>
+                )}
               </nav>
             </div>
           </div>

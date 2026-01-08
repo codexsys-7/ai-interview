@@ -8,3 +8,6 @@ openai>=1.40.0   # new SDK.
 assemblyai
 sqlmodel
 psycopg2-binary
+python-jose
+passlib[bcrypt]
+pydantic[email]

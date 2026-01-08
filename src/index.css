@@ -8,6 +8,7 @@ html, body, #root {
   background-color: #f9fafb; /* light gray bg */
   color: #111827; /* text-gray-900 */
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  margin: 0;
 }
 /* 
 :root {
