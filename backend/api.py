@@ -24,7 +24,7 @@ from pathlib import Path
 
 
 from sqlmodel import Session, select
-from db import engine, init_db, InterviewSession
+from db import engine, init_db, InterviewSession, InterviewAnswer
 from models import Resume, User
 
 from passlib.context import CryptContext
@@ -302,40 +302,459 @@ def clean_text(t: str) -> str:
     return t.strip()
 
 # ------------------- Question generation helpers (LLM) -------------------
-INTERVIEWER_HINTS = {
-    "Manager": "delivery, prioritization, stakeholder communication, sprint planning, on-call ownership",
-    "HR": "culture add, values alignment, teamwork, conflict resolution, communication",
-    "CEO": "business outcomes, vision, strategy, growth levers, risk, trade-offs, impact",
-    "President": "org-wide impact, strategic initiatives, competitive advantage, ROI",
-    "Vice President": "cross-functional leadership, scaling, OKRs, portfolio prioritization",
-    "CFO": "financial impact, unit economics, cost/benefit, budgeting, margins, ROI",
+
+# Comprehensive interviewer profiles with realistic question focus areas
+# Each interviewer has specific areas they focus on in real interviews
+INTERVIEWER_PROFILES = {
+    "HR": {
+        "title": "Human Resources",
+        "focus_areas": [
+            "culture fit and values alignment",
+            "teamwork and collaboration style",
+            "conflict resolution and interpersonal skills",
+            "career goals and motivation",
+            "communication skills",
+            "work-life balance expectations",
+            "salary expectations and benefits",
+            "reason for leaving previous role",
+            "handling feedback and criticism",
+            "diversity and inclusion awareness"
+        ],
+        "question_types": {"behavioral": 60, "situational": 25, "cultural": 15},
+        "tone": "warm, conversational, assessing personality and culture fit",
+        "example_questions": [
+            "Tell me about a time you had a disagreement with a colleague. How did you handle it?",
+            "What kind of work environment helps you do your best work?",
+            "How do you handle constructive criticism?",
+            "Where do you see yourself in 3-5 years?",
+            "Why are you interested in leaving your current position?"
+        ]
+    },
+    "Manager": {
+        "title": "Hiring Manager",
+        "focus_areas": [
+            "day-to-day work execution and delivery",
+            "prioritization and time management",
+            "collaboration with team members",
+            "handling deadlines and pressure",
+            "communication with stakeholders",
+            "problem-solving approach",
+            "ownership and accountability",
+            "project management and planning",
+            "technical skills relevant to the role",
+            "mentoring and helping others"
+        ],
+        "question_types": {"behavioral": 40, "technical": 35, "situational": 25},
+        "tone": "practical, focused on real work scenarios and team dynamics",
+        "example_questions": [
+            "Walk me through how you would approach a project with a tight deadline.",
+            "Tell me about a time you had to deliver something with incomplete requirements.",
+            "How do you prioritize when you have multiple urgent tasks?",
+            "Describe a situation where you had to push back on a stakeholder request.",
+            "How do you keep your team informed about project progress?"
+        ]
+    },
+    "Tech Lead": {
+        "title": "Technical Lead / Senior Engineer",
+        "focus_areas": [
+            "deep technical knowledge and expertise",
+            "system design and architecture",
+            "code quality and best practices",
+            "debugging and troubleshooting complex issues",
+            "performance optimization",
+            "security considerations",
+            "technical trade-offs and decision making",
+            "staying current with technology trends",
+            "code review and mentoring",
+            "technical documentation"
+        ],
+        "question_types": {"technical": 75, "problem_solving": 15, "behavioral": 10},
+        "tone": "technical, detailed, probing for depth of knowledge",
+        "example_questions": [
+            "How would you design a system that handles 10 million requests per day?",
+            "Explain a complex technical problem you solved and your approach.",
+            "What's your process for debugging a production issue at 2 AM?",
+            "How do you decide between building vs buying a solution?",
+            "Walk me through your code review process."
+        ]
+    },
+    "CEO": {
+        "title": "Chief Executive Officer",
+        "focus_areas": [
+            "business impact and value creation",
+            "strategic thinking and vision",
+            "leadership and influence",
+            "understanding of company mission",
+            "innovation and creative thinking",
+            "risk assessment and management",
+            "growth mindset and adaptability",
+            "customer-centric thinking",
+            "handling ambiguity and change",
+            "long-term thinking"
+        ],
+        "question_types": {"strategic": 50, "behavioral": 30, "vision": 20},
+        "tone": "big-picture, strategic, assessing leadership potential and business acumen",
+        "example_questions": [
+            "How would your work contribute to our company's mission?",
+            "Tell me about a time you identified a significant business opportunity.",
+            "How do you stay ahead of industry trends?",
+            "What's the biggest risk you've taken professionally, and what was the outcome?",
+            "How do you make decisions when you don't have all the information?"
+        ]
+    },
+    "CFO": {
+        "title": "Chief Financial Officer",
+        "focus_areas": [
+            "cost-benefit analysis and ROI thinking",
+            "budget management and resource allocation",
+            "financial impact of decisions",
+            "efficiency and optimization",
+            "data-driven decision making",
+            "risk vs reward assessment",
+            "understanding of business metrics",
+            "vendor management and negotiations",
+            "compliance and governance",
+            "scaling and growth considerations"
+        ],
+        "question_types": {"analytical": 50, "behavioral": 30, "business": 20},
+        "tone": "analytical, numbers-focused, assessing business and financial acumen",
+        "example_questions": [
+            "How do you measure the success of your projects in terms of business value?",
+            "Tell me about a time you had to make a decision with budget constraints.",
+            "How do you prioritize investments when resources are limited?",
+            "Describe a situation where you identified cost savings.",
+            "How do you calculate the ROI of a technical initiative?"
+        ]
+    },
+    "President": {
+        "title": "President / COO",
+        "focus_areas": [
+            "operational excellence and execution",
+            "cross-functional collaboration",
+            "organizational impact",
+            "process improvement",
+            "scaling teams and systems",
+            "stakeholder management",
+            "strategic planning and execution",
+            "performance metrics and KPIs",
+            "change management",
+            "building and maintaining partnerships"
+        ],
+        "question_types": {"strategic": 40, "leadership": 35, "operational": 25},
+        "tone": "operational, focused on execution and organizational impact",
+        "example_questions": [
+            "How have you contributed to improving processes in your organization?",
+            "Tell me about leading a cross-functional initiative.",
+            "How do you ensure alignment between different teams?",
+            "Describe a time you had to drive organizational change.",
+            "How do you measure and improve team performance?"
+        ]
+    },
+    "Vice President": {
+        "title": "Vice President",
+        "focus_areas": [
+            "strategic leadership and direction",
+            "building and scaling teams",
+            "cross-departmental influence",
+            "OKRs and goal setting",
+            "executive communication",
+            "talent development and retention",
+            "portfolio management",
+            "stakeholder relationships",
+            "innovation and transformation",
+            "representing the organization"
+        ],
+        "question_types": {"leadership": 45, "strategic": 35, "behavioral": 20},
+        "tone": "executive, focused on leadership, influence, and strategic impact",
+        "example_questions": [
+            "How do you build and maintain high-performing teams?",
+            "Tell me about a strategic initiative you led from concept to execution.",
+            "How do you handle competing priorities across departments?",
+            "Describe your approach to developing talent.",
+            "How do you communicate complex technical concepts to non-technical executives?"
+        ]
+    }
 }
 
-def interviewer_to_hint(name: str) -> str:
-    return INTERVIEWER_HINTS.get(name, "mix of technical depth, problem solving, and business impact")
+# Difficulty levels with detailed expectations
+DIFFICULTY_PROFILES = {
+    "intern": {
+        "experience_range": "0-1 years / Student",
+        "question_count": 12,
+        "technical_depth": "fundamental",
+        "expectations": [
+            "Basic understanding of core concepts",
+            "Eagerness to learn and grow",
+            "Academic projects and coursework",
+            "Problem-solving approach (not necessarily optimal solutions)",
+            "Communication of thought process",
+            "Enthusiasm and curiosity"
+        ],
+        "avoid": [
+            "Complex system design questions",
+            "Leadership and mentoring questions",
+            "Questions requiring production experience",
+            "Deep architectural trade-offs"
+        ],
+        "focus": "Learning ability, potential, basic fundamentals, enthusiasm"
+    },
+    "junior": {
+        "experience_range": "1-2 years",
+        "question_count": 15,
+        "technical_depth": "foundational with some practical application",
+        "expectations": [
+            "Solid grasp of fundamentals",
+            "Some real-world project experience",
+            "Basic debugging and troubleshooting",
+            "Understanding of development workflows",
+            "Collaboration in team settings",
+            "Growth mindset and coachability"
+        ],
+        "avoid": [
+            "Senior-level architecture questions",
+            "Questions about leading large teams",
+            "Complex distributed systems"
+        ],
+        "focus": "Core skills, problem-solving, learning from experiences, growth potential"
+    },
+    "associate": {
+        "experience_range": "2-4 years",
+        "question_count": 18,
+        "technical_depth": "solid practical knowledge",
+        "expectations": [
+            "Independent task completion",
+            "Moderate complexity problem solving",
+            "Code quality and best practices awareness",
+            "Effective collaboration",
+            "Some mentoring of juniors",
+            "Project ownership for defined scope"
+        ],
+        "avoid": [
+            "Questions requiring 10+ years experience",
+            "C-level strategic questions"
+        ],
+        "focus": "Technical competence, ownership, collaboration, growing independence"
+    },
+    "senior": {
+        "experience_range": "5-8 years",
+        "question_count": 20,
+        "technical_depth": "deep expertise with architectural thinking",
+        "expectations": [
+            "Technical leadership and decision making",
+            "System design and architecture",
+            "Mentoring and code reviews",
+            "Cross-team collaboration",
+            "Trade-off analysis",
+            "Business impact awareness",
+            "Production systems experience",
+            "Handling ambiguity"
+        ],
+        "avoid": [
+            "Basic/trivial technical questions",
+            "Questions appropriate for entry-level"
+        ],
+        "focus": "Architecture, trade-offs, leadership, business impact, mentoring"
+    },
+    "lead": {
+        "experience_range": "8+ years",
+        "question_count": 22,
+        "technical_depth": "expert with strategic vision",
+        "expectations": [
+            "Technical strategy and vision",
+            "Team building and development",
+            "Cross-organizational influence",
+            "Executive communication",
+            "Complex system ownership",
+            "Innovation and improvement",
+            "Risk management",
+            "Stakeholder management"
+        ],
+        "avoid": [
+            "Entry-level technical questions",
+            "Questions not befitting seniority"
+        ],
+        "focus": "Strategy, leadership, organizational impact, technical vision"
+    }
+}
+
+# Role-specific technical focus areas (inferred from resume/skills)
+ROLE_TECHNICAL_FOCUS = {
+    "software_engineer": {
+        "keywords": ["software", "developer", "engineer", "programming", "coding", "full stack", "backend", "frontend"],
+        "technical_areas": [
+            "coding and algorithms",
+            "system design",
+            "API design",
+            "database design",
+            "testing strategies",
+            "CI/CD and DevOps",
+            "code review",
+            "debugging production issues"
+        ]
+    },
+    "data_scientist": {
+        "keywords": ["data scientist", "machine learning", "ML", "AI", "analytics", "statistical"],
+        "technical_areas": [
+            "machine learning algorithms",
+            "statistical analysis",
+            "data preprocessing and cleaning",
+            "model evaluation and validation",
+            "feature engineering",
+            "A/B testing",
+            "data visualization",
+            "production ML systems"
+        ]
+    },
+    "data_engineer": {
+        "keywords": ["data engineer", "ETL", "pipeline", "data warehouse", "big data"],
+        "technical_areas": [
+            "data pipeline design",
+            "ETL processes",
+            "data warehouse architecture",
+            "big data technologies",
+            "data quality and governance",
+            "real-time vs batch processing",
+            "data modeling",
+            "performance optimization"
+        ]
+    },
+    "devops_engineer": {
+        "keywords": ["devops", "SRE", "infrastructure", "cloud", "kubernetes", "docker"],
+        "technical_areas": [
+            "CI/CD pipeline design",
+            "infrastructure as code",
+            "container orchestration",
+            "monitoring and alerting",
+            "incident response",
+            "security best practices",
+            "cost optimization",
+            "high availability design"
+        ]
+    },
+    "product_manager": {
+        "keywords": ["product manager", "product owner", "PM", "product"],
+        "technical_areas": [
+            "product strategy and roadmap",
+            "user research and feedback",
+            "prioritization frameworks",
+            "metrics and KPIs",
+            "stakeholder management",
+            "agile methodologies",
+            "go-to-market strategy",
+            "competitive analysis"
+        ]
+    },
+    "default": {
+        "keywords": [],
+        "technical_areas": [
+            "problem-solving approach",
+            "technical decision making",
+            "collaboration and communication",
+            "project execution",
+            "quality and attention to detail"
+        ]
+    }
+}
+
+
+def detect_role_category(role: str, skills: List[str]) -> str:
+    """
+    Detect the role category based on role title and skills from resume.
+    This helps generate more relevant technical questions.
+    """
+    role_lower = (role or "").lower()
+    skills_lower = " ".join(skills).lower() if skills else ""
+    combined = f"{role_lower} {skills_lower}"
+
+    for category, config in ROLE_TECHNICAL_FOCUS.items():
+        if category == "default":
+            continue
+        for keyword in config["keywords"]:
+            if keyword.lower() in combined:
+                return category
+
+    return "default"
+
+
+def get_interviewer_profile(interviewer: str) -> Dict[str, Any]:
+    """Get the profile for an interviewer, with fallback to Manager profile."""
+    return INTERVIEWER_PROFILES.get(interviewer, INTERVIEWER_PROFILES["Manager"])
+
+
+def get_difficulty_profile(difficulty: str) -> Dict[str, Any]:
+    """Get the profile for a difficulty level, with fallback to junior."""
+    lvl = (difficulty or "").lower()
+    if lvl in DIFFICULTY_PROFILES:
+        return DIFFICULTY_PROFILES[lvl]
+    # Map variations
+    if lvl in ["mid", "middle", "intermediate"]:
+        return DIFFICULTY_PROFILES["associate"]
+    if lvl in ["staff", "principal", "architect"]:
+        return DIFFICULTY_PROFILES["lead"]
+    return DIFFICULTY_PROFILES["junior"]
+
 
 def count_for_level(level: str) -> int:
-    lvl = (level or "").lower()
-    if lvl == "senior": return 26
-    if lvl == "associate": return 25
-    if lvl == "junior": return 20
-    return 15  # Intern
+    """Return question count based on difficulty level."""
+    profile = get_difficulty_profile(level)
+    return profile.get("question_count", 15)
+
+
+def calculate_question_distribution(interviewers: List[str], total_questions: int) -> Dict[str, int]:
+    """
+    Calculate how many questions each interviewer should ask.
+    Distributes questions realistically based on interviewer roles.
+    """
+    if not interviewers:
+        return {"Interviewer": total_questions}
+
+    # Weight different interviewers (Manager and Tech Lead typically ask more)
+    weights = {
+        "Manager": 3,
+        "Tech Lead": 3,
+        "HR": 2,
+        "CEO": 1,
+        "CFO": 1,
+        "President": 1,
+        "Vice President": 1
+    }
+
+    total_weight = sum(weights.get(i, 2) for i in interviewers)
+    distribution = {}
+
+    remaining = total_questions - 3  # Reserve 3 for warmup (HR typically does these)
+
+    for interviewer in interviewers:
+        weight = weights.get(interviewer, 2)
+        count = max(1, int((weight / total_weight) * remaining))
+        distribution[interviewer] = count
+
+    # Adjust to match total (add remaining to Manager or first interviewer)
+    allocated = sum(distribution.values())
+    diff = remaining - allocated
+    if diff != 0:
+        primary = "Manager" if "Manager" in distribution else interviewers[0]
+        distribution[primary] = distribution.get(primary, 0) + diff
+
+    return distribution
+
 
 def questions_schema_text() -> str:
+    """Return the JSON schema for question generation."""
     return """
 Return ONLY JSON with this shape:
 {
   "questions": [
     {
-      "prompt": string,
-      "topic": string,
-      "interviewer": string,
-      "type": string,
-      "idealAnswer": string,
+      "prompt": string (the actual question to ask),
+      "topic": string (e.g., "System Design", "Behavioral", "Technical", "Leadership"),
+      "interviewer": string (who asks this question),
+      "type": string (one of: "warmup", "technical", "behavioral", "situational", "strategic", "analytical"),
+      "idealAnswer": string (a strong example answer for reference),
       "rubric": {
-        "content": string,
-        "clarity": string,
-        "structure": string
+        "content": string (what makes a good answer content-wise),
+        "clarity": string (expectations for communication clarity),
+        "structure": string (expected answer structure, e.g., STAR method)
       }
     }
   ]
@@ -343,11 +762,27 @@ Return ONLY JSON with this shape:
 No extra keys. No prose outside JSON. No markdown.
 """.strip()
 
+
 def build_questions_system_prompt() -> str:
-    return (
-        "You are an interview question generator. "
-        "You must return STRICT JSON ONLY (no prose, no markdown) following the given schema."
-    )
+    """Build the system prompt for question generation."""
+    return """You are an expert interview question generator with 20+ years of experience conducting and designing technical and behavioral interviews at top companies like Google, Amazon, Microsoft, and Meta.
+
+Your task is to generate realistic, high-quality interview questions that:
+1. Are specific to the candidate's background and the role they're applying for
+2. Match the difficulty level appropriately
+3. Reflect what each interviewer type would realistically ask
+4. Include a mix of technical, behavioral, and situational questions
+5. Have practical, real-world relevance (not textbook questions)
+
+CRITICAL RULES:
+- Each question must be unique and not repeat concepts with different wording
+- Questions must be calibrated to the difficulty level
+- Technical questions should reference specific technologies from the candidate's skills
+- Behavioral questions should use "Tell me about a time..." or similar formats
+- Include the interviewer's name/role in each question object
+- Provide detailed ideal answers and rubrics
+
+You must return STRICT JSON ONLY following the given schema. No prose, no markdown, no explanations."""
 
 
 def build_questions_user_prompt(
@@ -359,66 +794,134 @@ def build_questions_user_prompt(
     keywords: List[str],
     job_description: Optional[str] = None,
 ) -> str:
-    total_allowed = count_for_level(difficulty)
+    """
+    Build a comprehensive user prompt for generating interview questions.
+    This creates role-specific, interviewer-appropriate, difficulty-calibrated questions.
+    """
+    # Get profiles
+    difficulty_profile = get_difficulty_profile(difficulty)
+    role_category = detect_role_category(role, skills)
+    role_tech_focus = ROLE_TECHNICAL_FOCUS.get(role_category, ROLE_TECHNICAL_FOCUS["default"])
+
+    # Calculate question count
+    total_allowed = difficulty_profile["question_count"]
     target = min(requested_total or total_allowed, total_allowed)
 
+    # Set default interviewers if none provided
     if not interviewers:
-        interviewers = ["Interviewer"]
+        interviewers = ["HR", "Manager", "Tech Lead"]
 
-    hints = "\n".join(f"- {n}: {interviewer_to_hint(n)}" for n in interviewers)
+    # Calculate question distribution per interviewer
+    distribution = calculate_question_distribution(interviewers, target)
 
-    skills_text = ", ".join(skills[:30]) if skills else "Not provided"
-    kw_text = ", ".join(keywords[:20]) if keywords else "Not provided"
+    # Build interviewer section with detailed guidance
+    interviewer_sections = []
+    for interviewer in interviewers:
+        profile = get_interviewer_profile(interviewer)
+        count = distribution.get(interviewer, 2)
 
+        section = f"""
+### {interviewer} ({profile['title']}) - {count} questions
+Focus Areas: {', '.join(profile['focus_areas'][:5])}
+Question Type Mix: {', '.join(f"{k}: {v}%" for k, v in profile['question_types'].items())}
+Tone: {profile['tone']}
+Example Questions:
+{chr(10).join(f"  - {q}" for q in profile['example_questions'][:3])}
+"""
+        interviewer_sections.append(section)
+
+    # Build skills section
+    skills_text = ", ".join(skills[:30]) if skills else "Not specified"
+    keywords_text = ", ".join(keywords[:20]) if keywords else "Not specified"
+    tech_focus = ", ".join(role_tech_focus["technical_areas"][:6])
+
+    # Build job description section if provided
+    jd_section = ""
     jd_text = (job_description or "").strip()
-    has_jd = len(jd_text) >= 40
+    if len(jd_text) >= 40:
+        jd_section = f"""
+## JOB DESCRIPTION ALIGNMENT (HIGH PRIORITY)
+{jd_text[:5000]}
 
-    jd_block = ""
-    if has_jd:
-        jd_block = f"""
-JOB DESCRIPTION (PRIMARY GUIDANCE):
-{jd_text[:7000]}
+IMPORTANT JD REQUIREMENTS:
+- Generate questions that directly verify the candidate can perform JD responsibilities
+- Include questions about specific tools/technologies mentioned in the JD
+- Ask about experiences relevant to the job requirements
+- Include 2-3 questions probing potential gaps (skills in JD but not in resume)
+"""
 
-IMPORTANT:
-- Questions must align to the responsibilities, tools, and requirements in the JD.
-- Prefer questions that verify the candidate can do the JD tasks in practice.
-- If the JD mentions specific tools (e.g., Kafka, Airflow, Snowflake), include at least 2–4 questions on them.
-- Include 2–3 gap-check questions where a candidate may be weak (missing keywords).
-""".strip()
+    # Build the comprehensive prompt
+    prompt = f"""
+# INTERVIEW QUESTION GENERATION REQUEST
 
-    return f"""
-ROLE: {role or "Candidate"}
-DIFFICULTY: {difficulty or "Junior"}
+## CANDIDATE PROFILE
+- **Target Role**: {role or "Software Professional"}
+- **Experience Level**: {difficulty or "Junior"} ({difficulty_profile['experience_range']})
+- **Core Skills**: {skills_text}
+- **Keywords/Domains**: {keywords_text}
+- **Detected Role Category**: {role_category.replace('_', ' ').title()}
+- **Technical Focus Areas**: {tech_focus}
 
-CANDIDATE PROFILE FROM RESUME:
-- Core skills: {skills_text}
-- Keywords / domains: {kw_text}
+{jd_section}
 
-{jd_block}
+## DIFFICULTY CALIBRATION: {difficulty.upper() if difficulty else "JUNIOR"}
+**Experience Range**: {difficulty_profile['experience_range']}
+**Technical Depth Expected**: {difficulty_profile['technical_depth']}
 
-INTERVIEWER PANEL & FOCUS:
-{hints}
+**What to Expect from This Level**:
+{chr(10).join(f"- {exp}" for exp in difficulty_profile['expectations'])}
 
-GOAL:
-- Produce exactly {target} total questions.
-- The FIRST 3 must be welcoming warm-up questions (type="warmup") in this order:
-  1) "Could you please walk me through your professional background?"
-  2) "What attracted you to this opportunity and our organization?"
-  3) "What would you consider to be your key strengths and areas for improvement?"
+**Avoid These for This Level**:
+{chr(10).join(f"- {avoid}" for avoid in difficulty_profile['avoid'])}
 
-- The remaining {max(target - 3, 0)} must:
-  - Mix technical and behavioral questions.
-  - If JOB DESCRIPTION is provided, prioritize JD alignment over generic role questions.
-  - Make questions concrete and realistic: tools, trade-offs, debugging, metrics, delivery, ownership.
-  - Avoid repeating the same concept with different wording.
+**Focus On**: {difficulty_profile['focus']}
 
-DIFFICULTY CALIBRATION:
-- Senior: strategy, architecture, trade-offs, leadership, business impact.
-- Junior/Intern: fundamentals, reasoning, learning mindset, basic design decisions.
+## INTERVIEWER PANEL
+{chr(10).join(interviewer_sections)}
 
-SCHEMA (must follow exactly):
+## QUESTION GENERATION REQUIREMENTS
+
+### Total Questions: {target}
+
+### Question Structure:
+1. **Warmup Questions (First 3)** - Asked by HR or Manager
+   - Start with a friendly, open-ended introduction question
+   - Ask about motivation for applying
+   - Ask about self-assessment (strengths/growth areas)
+
+2. **Technical Questions** - Based on skills and role
+   - Ask about specific technologies from the candidate's skill set: {skills_text}
+   - Include practical scenarios, not just theoretical questions
+   - Calibrate complexity to {difficulty} level
+
+3. **Behavioral Questions** - Using STAR method prompts
+   - "Tell me about a time when..."
+   - "Describe a situation where..."
+   - "Give me an example of..."
+
+4. **Situational Questions** - Hypothetical scenarios
+   - "How would you handle..."
+   - "What would you do if..."
+   - "Imagine you're faced with..."
+
+### Quality Requirements:
+- Each question must be UNIQUE (no conceptual duplicates)
+- Questions must reference SPECIFIC skills from the candidate's profile
+- Technical questions should mention actual technologies: {skills_text}
+- Behavioral questions should be role-relevant
+- Ideal answers should be detailed (3-5 sentences minimum)
+- Rubrics should give clear evaluation criteria
+
+### Distribution by Interviewer:
+{chr(10).join(f"- {name}: {count} questions" for name, count in distribution.items())}
+
+## OUTPUT FORMAT
 {questions_schema_text()}
-""".strip()
+
+Generate exactly {target} high-quality, realistic interview questions now.
+"""
+
+    return prompt.strip()
 
 
 
@@ -858,6 +1361,106 @@ class ScoreInterviewResp(BaseModel):
     questions: List[QuestionFeedback]
     overall: OverallFeedback
 
+
+# -------------------- Interview Answer Models --------------------
+# These models handle the submission of individual interview answers
+# for the two-way communication feature (Phase 1)
+
+class SubmitAnswerRequest(BaseModel):
+    """
+    Request model for submitting an interview answer.
+    Validates all required fields for storing a Q&A pair.
+    """
+    session_id: str = Field(..., description="UUID of the interview session")
+    question_id: int = Field(..., description="The order/number of the question (1-indexed)")
+    question_text: str = Field(..., description="The actual question that was asked")
+    question_intent: str = Field(..., description="What the question was testing (e.g., 'technical skills', 'problem solving')")
+    role: str = Field(..., description="The role being interviewed for (e.g., 'Software Engineer')")
+    user_answer: str = Field(..., description="The user's transcribed response")
+    transcript_raw: Optional[str] = Field(None, description="Full transcript with timestamps if available")
+    audio_duration_seconds: Optional[float] = Field(None, description="Duration of the audio response in seconds")
+
+
+class SubmitAnswerResponse(BaseModel):
+    """
+    Response model for a successfully submitted answer.
+    """
+    success: bool
+    answer_id: str
+    message: str
+
+
+class AnswerDetail(BaseModel):
+    """
+    Response model for a single answer in the list.
+    Contains all stored answer data for display/processing.
+    """
+    id: str
+    session_id: str
+    question_id: int
+    question_text: str
+    question_intent: str
+    role: str
+    user_answer: str
+    transcript_raw: Optional[str]
+    audio_duration_seconds: Optional[float]
+    answer_timestamp: datetime
+    created_at: datetime
+
+
+class RetrieveAnswersResponse(BaseModel):
+    """
+    Response model for retrieving all answers in a session.
+    """
+    success: bool
+    session_id: str
+    total_answers: int
+    answers: List[AnswerDetail]
+
+
+# -------------------- Interview Session Models --------------------
+# These models handle creating a new interview session at the START
+# so answers can be saved in real-time during the interview
+
+class CreateSessionRequest(BaseModel):
+    """
+    Request model for creating a new interview session.
+    Contains the interview configuration/metadata.
+    """
+    role: str = Field(..., description="The role being interviewed for (e.g., 'Software Engineer')")
+    difficulty: str = Field(..., description="Interview difficulty level (e.g., 'Junior', 'Senior')")
+    question_count: int = Field(..., description="Total number of questions in this interview")
+    interviewer_names: List[str] = Field(default=[], description="List of interviewer names/roles")
+    plan: Optional[Dict[str, Any]] = Field(None, description="Full interview plan with questions")
+
+
+class CreateSessionResponse(BaseModel):
+    """
+    Response model for a successfully created session.
+    Returns the session_id needed for submitting answers.
+    """
+    success: bool
+    session_id: str
+    message: str
+
+
+class SessionDetailResponse(BaseModel):
+    """
+    Response model for fetching full session details.
+    Includes session metadata, plan, and all answers.
+    Used by Feedback page to retrieve interview data from database.
+    """
+    success: bool
+    session_id: str
+    role: str
+    difficulty: str
+    question_count: int
+    interviewer_names: List[str]
+    plan: Optional[Dict[str, Any]]
+    answers: List[AnswerDetail]
+    created_at: datetime
+
+
 def build_scoring_system_prompt() -> str:
     return (
         "You are a supportive but honest interview coach evaluating a candidate's answers.\n\n"
@@ -1160,4 +1763,304 @@ def score_interview(req: ScoreInterviewReq):
                     "Take your time — a calm pause between points makes you sound like a pro.",
                 ],
             ),
+        )
+
+
+# -------------------- Interview Answer Endpoints --------------------
+# Phase 1: Two-way communication - Answer Storage System
+
+@app.post("/api/interview/answer/submit", response_model=SubmitAnswerResponse)
+async def submit_interview_answer(request: SubmitAnswerRequest):
+    """
+    Submit and store a single interview answer.
+
+    This endpoint:
+    1. Validates that the referenced interview session exists
+    2. Creates a new InterviewAnswer record in the database
+    3. Returns the generated answer_id for reference
+
+    Args:
+        request: SubmitAnswerRequest containing all answer details
+
+    Returns:
+        SubmitAnswerResponse with success status and answer_id
+
+    Raises:
+        HTTPException 404: If the session_id doesn't exist
+        HTTPException 500: If there's a database error
+    """
+
+    # Step 1: Validate that the interview session exists in the database
+    with Session(engine) as db_session:
+        existing_session = db_session.exec(
+            select(InterviewSession).where(InterviewSession.id == request.session_id)
+        ).first()
+
+        # If no session found, return 404 error
+        if not existing_session:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interview session with id '{request.session_id}' not found"
+            )
+
+    # Step 2: Create and store the InterviewAnswer record
+    try:
+        with Session(engine) as db_session:
+            # Create new answer object with all provided data
+            new_answer = InterviewAnswer(
+                session_id=request.session_id,
+                question_id=request.question_id,
+                question_text=request.question_text,
+                question_intent=request.question_intent,
+                role=request.role,
+                user_answer=request.user_answer,
+                transcript_raw=request.transcript_raw,
+                audio_duration_seconds=request.audio_duration_seconds
+            )
+
+            # Add to database and commit the transaction
+            db_session.add(new_answer)
+            db_session.commit()
+
+            # Refresh to get the auto-generated UUID
+            db_session.refresh(new_answer)
+
+            # Store the generated ID for the response
+            answer_id = new_answer.id
+
+    except Exception as e:
+        # Log the error for debugging and return a generic 500 error
+        logging.error(f"Failed to store interview answer: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to store interview answer. Please try again."
+        )
+
+    # Step 3: Return success response with the new answer's ID (convert UUID to string)
+    return SubmitAnswerResponse(
+        success=True,
+        answer_id=str(answer_id),
+        message="Answer submitted successfully"
+    )
+
+
+@app.get("/api/interview/answers/{session_id}", response_model=RetrieveAnswersResponse)
+async def get_interview_answers(session_id: str):
+    """
+    Retrieve all answers for a given interview session.
+
+    This endpoint:
+    1. Validates that the interview session exists
+    2. Fetches all answers associated with the session
+    3. Returns them ordered by answer_timestamp (chronological)
+
+    Args:
+        session_id: UUID of the interview session
+
+    Returns:
+        RetrieveAnswersResponse with list of all answers
+
+    Raises:
+        HTTPException 404: If the session_id doesn't exist
+        HTTPException 500: If there's a database error
+    """
+
+    # Step 1: Validate that the interview session exists
+    with Session(engine) as db_session:
+        existing_session = db_session.exec(
+            select(InterviewSession).where(InterviewSession.id == session_id)
+        ).first()
+
+        # If no session found, return 404 error
+        if not existing_session:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interview session with id '{session_id}' not found"
+            )
+
+    # Step 2: Retrieve all answers for this session, ordered chronologically
+    try:
+        with Session(engine) as db_session:
+            # Query answers filtered by session_id, ordered by answer_timestamp
+            answers = db_session.exec(
+                select(InterviewAnswer)
+                .where(InterviewAnswer.session_id == session_id)
+                .order_by(InterviewAnswer.answer_timestamp)
+            ).all()
+
+            # Convert SQLModel objects to Pydantic response models (convert UUIDs to strings)
+            answer_list = [
+                AnswerDetail(
+                    id=str(answer.id),
+                    session_id=str(answer.session_id),
+                    question_id=answer.question_id,
+                    question_text=answer.question_text,
+                    question_intent=answer.question_intent,
+                    role=answer.role,
+                    user_answer=answer.user_answer,
+                    transcript_raw=answer.transcript_raw,
+                    audio_duration_seconds=float(answer.audio_duration_seconds) if answer.audio_duration_seconds else None,
+                    answer_timestamp=answer.answer_timestamp,
+                    created_at=answer.created_at
+                )
+                for answer in answers
+            ]
+
+    except Exception as e:
+        # Log the error and return a 500 response
+        logging.error(f"Failed to retrieve interview answers: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve interview answers. Please try again."
+        )
+
+    # Step 3: Return the list of answers
+    return RetrieveAnswersResponse(
+        success=True,
+        session_id=session_id,
+        total_answers=len(answer_list),
+        answers=answer_list
+    )
+
+
+@app.post("/api/interview/session/create", response_model=CreateSessionResponse)
+async def create_interview_session(request: CreateSessionRequest):
+    """
+    Create a new interview session at the START of an interview.
+
+    This endpoint:
+    1. Creates a new InterviewSession record with the provided metadata
+    2. Returns the session_id for use in subsequent answer submissions
+
+    This allows answers to be saved in real-time during the interview,
+    rather than waiting until the end. If the browser crashes, answers
+    are already persisted in the database.
+
+    Args:
+        request: CreateSessionRequest with interview configuration
+
+    Returns:
+        CreateSessionResponse with the new session_id
+
+    Raises:
+        HTTPException 500: If there's a database error
+    """
+
+    try:
+        with Session(engine) as db_session:
+            # Create new interview session with provided metadata
+            new_session = InterviewSession(
+                role=request.role,
+                difficulty=request.difficulty,
+                question_count=request.question_count,
+                interviewer_names=request.interviewer_names or [],
+                plan=request.plan,
+                # answers and report will be updated later
+                answers=[],
+                report=None
+            )
+
+            # Add to database and commit
+            db_session.add(new_session)
+            db_session.commit()
+
+            # Refresh to get the auto-generated UUID
+            db_session.refresh(new_session)
+
+            session_id = new_session.id
+
+    except Exception as e:
+        # Log the error and return a 500 response
+        logging.error(f"Failed to create interview session: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create interview session. Please try again."
+        )
+
+    # Return success with the new session_id (convert UUID to string)
+    return CreateSessionResponse(
+        success=True,
+        session_id=str(session_id),
+        message="Interview session created successfully"
+    )
+
+
+@app.get("/api/interview/session/{session_id}", response_model=SessionDetailResponse)
+async def get_interview_session(session_id: str):
+    """
+    Retrieve full session details including all answers.
+
+    This endpoint is used by the Feedback page to fetch interview data
+    from the database instead of relying on localStorage.
+
+    Args:
+        session_id: UUID of the interview session
+
+    Returns:
+        SessionDetailResponse with session metadata, plan, and all answers
+
+    Raises:
+        HTTPException 404: If the session_id doesn't exist
+        HTTPException 500: If there's a database error
+    """
+
+    try:
+        with Session(engine) as db_session:
+            # Fetch the interview session
+            interview_session = db_session.exec(
+                select(InterviewSession).where(InterviewSession.id == session_id)
+            ).first()
+
+            # If no session found, return 404 error
+            if not interview_session:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Interview session with id '{session_id}' not found"
+                )
+
+            # Fetch all answers for this session, ordered chronologically
+            answers = db_session.exec(
+                select(InterviewAnswer)
+                .where(InterviewAnswer.session_id == session_id)
+                .order_by(InterviewAnswer.answer_timestamp)
+            ).all()
+
+            # Convert answers to response format (convert UUIDs to strings)
+            answer_list = [
+                AnswerDetail(
+                    id=str(answer.id),
+                    session_id=str(answer.session_id),
+                    question_id=answer.question_id,
+                    question_text=answer.question_text,
+                    question_intent=answer.question_intent,
+                    role=answer.role,
+                    user_answer=answer.user_answer,
+                    transcript_raw=answer.transcript_raw,
+                    audio_duration_seconds=float(answer.audio_duration_seconds) if answer.audio_duration_seconds else None,
+                    answer_timestamp=answer.answer_timestamp,
+                    created_at=answer.created_at
+                )
+                for answer in answers
+            ]
+
+            # Return full session details (convert UUID to string)
+            return SessionDetailResponse(
+                success=True,
+                session_id=str(interview_session.id),
+                role=interview_session.role,
+                difficulty=interview_session.difficulty,
+                question_count=interview_session.question_count,
+                interviewer_names=interview_session.interviewer_names or [],
+                plan=interview_session.plan,
+                answers=answer_list,
+                created_at=interview_session.created_at
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Failed to retrieve interview session: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve interview session. Please try again."
         )

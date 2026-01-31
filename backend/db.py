@@ -6,6 +6,8 @@ import models
 from sqlalchemy import Column, JSON
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from decimal import Decimal
+import uuid
 
 
 # Load DATABASE_URL from environment
@@ -32,7 +34,11 @@ def init_db() -> None:
 class InterviewSession(SQLModel, table=True):
     __tablename__ = "interview_sessions"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        primary_key=True,
+        index=True
+    )
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     # high-level metadata
@@ -58,3 +64,23 @@ class InterviewSession(SQLModel, table=True):
         default=None,
         sa_column=Column(JSON)
     )
+
+
+class InterviewAnswer(SQLModel, table=True):
+    __tablename__ = "interview_answers"
+
+    id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        primary_key=True,
+        index=True
+    )
+    session_id: str = Field(foreign_key="interview_sessions.id", index=True)
+    question_id: int = Field(nullable=False)
+    question_text: str = Field(nullable=False)
+    question_intent: str = Field(max_length=255, nullable=False)
+    role: str = Field(max_length=255, nullable=False)
+    user_answer: str = Field(nullable=False)
+    transcript_raw: Optional[str] = Field(default=None)
+    audio_duration_seconds: Optional[Decimal] = Field(default=None)
+    answer_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow)

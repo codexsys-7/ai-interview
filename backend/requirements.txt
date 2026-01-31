@@ -11,3 +11,7 @@ psycopg2-binary
 python-jose
 passlib[bcrypt]
 pydantic[email]
+
+# Testing dependencies
+pytest
+httpx            # Required for FastAPI TestClient

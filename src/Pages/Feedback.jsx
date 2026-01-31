@@ -9,6 +9,7 @@ import autoTable from "jspdf-autotable";
 const PLAN_KEY = "interviewPlan";
 const RESULTS_KEY = "interviewResults";
 const JD_KEY = "jobDescriptionText";
+const SESSION_ID_KEY = "interviewSessionId";
 
 export default function Feedback() {
   const navigate = useNavigate();
@@ -23,131 +24,163 @@ export default function Feedback() {
     document.title = "InterVue Labs > Feedback Report";
   }, []);
 
-  // Load plan + results and call backend
+  // Load interview data from DATABASE and call scoring backend
   useEffect(() => {
     if (hasScoredRef.current) return; // stops second execution
     hasScoredRef.current = true;
 
-    const rawPlan = localStorage.getItem(PLAN_KEY);
-    const rawResults = localStorage.getItem(RESULTS_KEY);
+    const fetchAndScore = async () => {
+      setIsLoading(true);
 
-    // No interview completed
-    if (!rawPlan || !rawResults) {
-      setLoadError(
-        "No finished interview found. Upload your resume, generate questions, complete an interview, then come back for your InterVue Labs scorecard."
-      );
-      setIsLoading(false);
-      return;
-    }
+      // Get sessionId from localStorage
+      const sessionId = localStorage.getItem(SESSION_ID_KEY);
+      const rawPlan = localStorage.getItem(PLAN_KEY);
+      const rawResults = localStorage.getItem(RESULTS_KEY);
+      const jdText = (localStorage.getItem(JD_KEY) || "").trim();
 
-    let plan, results;
-    // Safely parse JSON
-    try {
-      plan = JSON.parse(rawPlan);
-      results = JSON.parse(rawResults);
-    } catch (e) {
-      console.error("Failed to parse stored interview data:", e);
-      setLoadError(
-        "Your saved interview data is corrupted. Please run a fresh interview to get a new feedback report."
-      );
-      setIsLoading(false);
-      return;
-    }
-
-    const role = plan?.meta?.role || "Candidate";
-    const difficulty = plan?.meta?.difficulty || "Junior";
-    const answers = Array.isArray(results.answers) ? results.answers : [];
-
-    const jdText = (localStorage.getItem(JD_KEY) || "").trim();
-
-    // Require at least one non-empty answer
-    const hasRealAnswer = answers.some(
-      (a) => (a.userAnswer || "").trim().length > 0
-    );
-
-    if (!answers.length || !hasRealAnswer) {
-      setLoadError(
-        "We couldn’t find any recorded answers. Finish at least one question in an interview before asking for feedback."
-      );
-      setIsLoading(false);
-      return;
-    }
-
-    // Call backend to score + (optionally) save to DB
-    (async () => {
+      // Parse stored data for fallback info
+      let plan = null;
+      let storedMeta = null;
       try {
-        setIsLoading(true);
+        if (rawPlan) plan = JSON.parse(rawPlan);
+        if (rawResults) storedMeta = JSON.parse(rawResults)?.meta;
+      } catch (e) {
+        console.error("Failed to parse stored data:", e);
+      }
 
-        const res = await fetch("http://127.0.0.1:8000/api/score-interview", {
+      // No session ID means interview wasn't completed properly
+      if (!sessionId) {
+        setLoadError(
+          "No finished interview found. Upload your resume, generate questions, complete an interview, then come back for your InterVue Labs scorecard."
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        // Step 1: Fetch interview session and answers from database
+        const sessionRes = await fetch(
+          `http://127.0.0.1:8000/api/interview/session/${sessionId}`
+        );
+
+        if (!sessionRes.ok) {
+          throw new Error("Failed to fetch interview session");
+        }
+
+        const sessionData = await sessionRes.json();
+
+        // Extract data from database response
+        const role = sessionData.role || storedMeta?.role || "Candidate";
+        const difficulty = sessionData.difficulty || storedMeta?.difficulty || "Junior";
+        const dbAnswers = sessionData.answers || [];
+        const dbPlan = sessionData.plan || plan;
+
+        // Convert database answers to the format expected by score-interview
+        const answers = dbAnswers.map((a) => {
+          // Find the matching question from the plan to get idealAnswer
+          const matchingQuestion = dbPlan?.questions?.find(
+            (q) => q.id === a.question_id
+          );
+
+          return {
+            id: a.question_id,
+            prompt: a.question_text,
+            interviewer: matchingQuestion?.interviewer || "Interviewer",
+            type: a.question_intent,
+            userAnswer: a.user_answer,
+            idealAnswer: matchingQuestion?.idealAnswer || "",
+          };
+        });
+
+        // Require at least one non-empty answer
+        const hasRealAnswer = answers.some(
+          (a) => (a.userAnswer || "").trim().length > 0
+        );
+
+        if (!answers.length || !hasRealAnswer) {
+          setLoadError(
+            "We couldn't find any recorded answers. Finish at least one question in an interview before asking for feedback."
+          );
+          setIsLoading(false);
+          return;
+        }
+
+        // Step 2: Call scoring endpoint
+        const scoreRes = await fetch("http://127.0.0.1:8000/api/score-interview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // 👇 plan is sent as well so backend has full context
           body: JSON.stringify({
             role,
             difficulty,
             answers,
-            plan,
+            plan: dbPlan,
             jobDescription: jdText.length >= 40 ? jdText : null,
           }),
         });
 
-        if (!res.ok) throw new Error("Failed to score interview");
+        if (!scoreRes.ok) throw new Error("Failed to score interview");
 
-        const data = await res.json();
+        const data = await scoreRes.json();
         setReport(data);
-      } catch (err) {
-        console.error("Scoring API failed, using fallback report:", err);
 
-        // Fallback basic report if API is down or errors out
-        setReport({
-          meta: {
-            role,
-            difficulty,
-            questionCount: answers.length,
-            fallback: true,
-          },
-          questions: answers.map((a) => ({
-            id: a.id,
-            prompt: a.prompt,
-            interviewer: a.interviewer,
-            type: a.type,
-            userAnswer: a.userAnswer,
-            idealAnswer: a.idealAnswer || "",
-            scores: {
-              content: 3,
-              structure: 3,
-              clarity: 3,
-              confidence: 3,
-              relevance: 3,
+      } catch (err) {
+        console.error("Failed to fetch/score interview:", err);
+
+        // Try to create a fallback report if we have any stored data
+        if (plan?.questions?.length) {
+          setReport({
+            meta: {
+              role: storedMeta?.role || "Candidate",
+              difficulty: storedMeta?.difficulty || "Junior",
+              questionCount: plan.questions.length,
+              fallback: true,
             },
-            strengths: [
-              "You stayed engaged and tried to answer every question – that already puts you ahead.",
-            ],
-            improvements: [
-              "Use a clear beginning–middle–end (STAR: Situation, Task, Action, Result).",
-              "Add 1–2 concrete metrics to show impact.",
-            ],
-            suggestedAnswer: a.idealAnswer || "",
-          })),
-          overall: {
-            overallScore: 3,
-            summary:
-              "Promising baseline. With more structure, clarity, and metrics, you can sound very strong.",
-            strengths: [
-              "You consistently tried to address each question.",
-              "You have relevant experience you can build into strong stories.",
-            ],
-            improvements: [
-              "Practice using STAR structure (Situation, Task, Action, Result).",
-              "Add 1–2 numbers (%, $, time saved) to each story.",
-              "Slow down and pause between points to sound more confident.",
-            ],
-          },
-        });
+            questions: plan.questions.map((q) => ({
+              id: q.id,
+              prompt: q.prompt,
+              interviewer: q.interviewer,
+              type: q.type,
+              userAnswer: "Answer not available - database fetch failed",
+              idealAnswer: q.idealAnswer || "",
+              scores: {
+                content: 3,
+                structure: 3,
+                clarity: 3,
+                confidence: 3,
+                relevance: 3,
+              },
+              strengths: [
+                "You stayed engaged and tried to answer every question – that already puts you ahead.",
+              ],
+              improvements: [
+                "Use a clear beginning–middle–end (STAR: Situation, Task, Action, Result).",
+                "Add 1–2 concrete metrics to show impact.",
+              ],
+              suggestedAnswer: q.idealAnswer || "",
+            })),
+            overall: {
+              overallScore: 3,
+              summary:
+                "We couldn't retrieve your full answers from the database. Please try again or start a new interview.",
+              strengths: [
+                "You completed the interview process.",
+              ],
+              improvements: [
+                "If this error persists, please start a new interview.",
+              ],
+            },
+          });
+        } else {
+          setLoadError(
+            "Failed to retrieve your interview data. Please try again or start a new interview."
+          );
+        }
       } finally {
         setIsLoading(false);
       }
-    })();
+    };
+
+    fetchAndScore();
   }, [navigate]);
 
   // Error state: no data / corrupted / no answers

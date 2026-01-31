@@ -68,14 +68,30 @@ export default function Interview() {
   const recognitionRef = useRef(null);
   const transcriptBufferRef = useRef("");
 
-  // ----- Results we’ll save for feedback -----
+  // ----- Results we'll save for feedback -----
   const [answers, setAnswers] = useState([]);
 
   // What to do after transcription finishes: "next" | "end" | null
   const pendingNavRef = useRef(null);
 
+  // ----- Session & Answer Saving (Phase 1: Two-way communication) -----
+  const [sessionId, setSessionId] = useState(null);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null); // "saving" | "saved" | "error" | null
+  const saveStatusTimeoutRef = useRef(null);
+  const recordingStartTimeRef = useRef(null); // Track when recording started for duration
+
   useEffect(() => {
     document.title = "InterVue Labs > Interview";
+  }, []);
+
+  // Cleanup save status timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveStatusTimeoutRef.current) {
+        clearTimeout(saveStatusTimeoutRef.current);
+      }
+    };
   }, []);
 
   // ------------ Load plan from localStorage ------------
@@ -112,6 +128,54 @@ export default function Interview() {
   );
 
   const total = plan?.meta?.questionCount || plan?.questions?.length || 0;
+
+  // ------------ Create interview session when plan loads ------------
+  // This creates a session in the database so we can save answers in real-time
+  useEffect(() => {
+    // Only create session if we have a plan and haven't created one yet
+    if (!plan || sessionId || isCreatingSession || loadError) return;
+
+    const createSession = async () => {
+      setIsCreatingSession(true);
+      try {
+        // Extract interviewer names from questions
+        const interviewerNames = [
+          ...new Set(plan.questions.map((q) => q.interviewer).filter(Boolean)),
+        ];
+
+        const response = await fetch(
+          "http://127.0.0.1:8000/api/interview/session/create",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              role: plan.meta?.role || "Candidate",
+              difficulty: plan.meta?.difficulty || "Junior",
+              question_count: plan.questions.length,
+              interviewer_names: interviewerNames,
+              plan: plan, // Store the full plan for reference
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to create interview session");
+        }
+
+        const data = await response.json();
+        setSessionId(data.session_id);
+        console.log("Interview session created:", data.session_id);
+      } catch (err) {
+        console.error("Failed to create interview session:", err);
+        // Don't block the interview if session creation fails
+        // Answers will still be saved locally and submitted at the end
+      } finally {
+        setIsCreatingSession(false);
+      }
+    };
+
+    createSession();
+  }, [plan, sessionId, isCreatingSession, loadError]);
 
   // ------------ Get user media (camera + mic) ------------
   // If there is no plan or we already hit a load error,
@@ -300,6 +364,9 @@ export default function Interview() {
       setTranscript("");
       setIsTranscribing(false);
 
+      // Track when recording started (for calculating audio duration)
+      recordingStartTimeRef.current = Date.now();
+
       // Create an audio-only stream for MediaRecorder
       const audioOnlyStream = new MediaStream(audioTracks);
       const mr = new MediaRecorder(audioOnlyStream);
@@ -475,14 +542,93 @@ export default function Interview() {
   // ------------ When the user Next / End interview, It saves the current answer using the fucntion, buildAnswersWithCurrent ------------
 
   /**
+   * Submit the current answer to the server for real-time persistence.
+   * This runs in the background - doesn't block the UI.
+   * Shows a subtle indicator of save status.
+   */
+  const submitAnswerToServer = async (answerEntry) => {
+    // If no session was created, skip server submission
+    // (answers will still be saved locally and at the end)
+    if (!sessionId) {
+      console.log("No session ID - skipping server submission");
+      return;
+    }
+
+    // Clear any pending status timeout
+    if (saveStatusTimeoutRef.current) {
+      clearTimeout(saveStatusTimeoutRef.current);
+    }
+
+    // Show saving indicator
+    setSaveStatus("saving");
+
+    try {
+      // Calculate audio duration if we have a start time
+      let audioDuration = null;
+      if (recordingStartTimeRef.current) {
+        audioDuration = (Date.now() - recordingStartTimeRef.current) / 1000;
+        recordingStartTimeRef.current = null; // Reset for next question
+      }
+
+      const response = await fetch(
+        "http://127.0.0.1:8000/api/interview/answer/submit",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionId,
+            question_id: answerEntry.id,
+            question_text: answerEntry.prompt,
+            question_intent: answerEntry.type || "general", // Use question type as intent
+            role: plan?.meta?.role || "Candidate",
+            user_answer: answerEntry.userAnswer,
+            transcript_raw: answerEntry.userAnswer, // Same as user_answer for now
+            audio_duration_seconds: audioDuration,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to submit answer");
+      }
+
+      const data = await response.json();
+      console.log("Answer saved to server:", data.answer_id);
+
+      // Show saved indicator briefly
+      setSaveStatus("saved");
+      saveStatusTimeoutRef.current = setTimeout(() => {
+        setSaveStatus(null);
+      }, 2000); // Hide after 2 seconds
+
+    } catch (err) {
+      console.error("Failed to submit answer to server:", err);
+      // Show error indicator briefly, but don't block the interview
+      setSaveStatus("error");
+      saveStatusTimeoutRef.current = setTimeout(() => {
+        setSaveStatus(null);
+      }, 3000); // Hide after 3 seconds
+    }
+  };
+
+  /**
    * Move to the next question.
    * - Saves the current transcript into answers
+   * - Submits answer to server for real-time persistence
    * - Increments currentIdx
    * - Resets transcript + think time state
    */
 
   const advanceToNextQuestion = (mergedAnswers) => {
     if (!plan || !q) return;
+
+    // Find the current answer entry that was just saved
+    const currentAnswer = mergedAnswers.find((a) => a.id === q.id);
+
+    // Submit the answer to server in the background (non-blocking)
+    if (currentAnswer) {
+      submitAnswerToServer(currentAnswer);
+    }
 
     const totalQuestions = plan.questions.length;
 
@@ -509,6 +655,14 @@ export default function Interview() {
   };
 
   const finalizeAndExitInterview = (mergedAnswers) => {
+    // Submit the last answer to server before exiting
+    if (q) {
+      const lastAnswer = mergedAnswers.find((a) => a.id === q.id);
+      if (lastAnswer) {
+        submitAnswerToServer(lastAnswer);
+      }
+    }
+
     // Hard-stop camera + mic and audio graph
     try {
       if (streamRef.current) {
@@ -534,12 +688,20 @@ export default function Interview() {
       return;
     }
 
-    const payload = {
-      meta: plan.meta || {},
-      answers: mergedAnswers,
-    };
+    // Store only sessionId in localStorage - Feedback page will fetch from database
+    // This is the database-only approach: single source of truth
+    if (sessionId) {
+      localStorage.setItem("interviewSessionId", sessionId);
+    }
 
+    // Keep the plan in localStorage for fallback (in case DB fetch fails)
+    // But remove the full answers array - they're now in the database
+    const payload = {
+      meta: { ...plan.meta, sessionId: sessionId },
+      // Note: answers are NOT stored here anymore - fetch from database instead
+    };
     localStorage.setItem(RESULTS_KEY, JSON.stringify(payload));
+
     navigate("/feedback");
   };
 
@@ -681,6 +843,37 @@ export default function Interview() {
           transcript={transcript}
           isTranscribing={isTranscribing}
         />
+
+        {/* Save Status Indicator - subtle notification in bottom-right corner */}
+        {saveStatus && (
+          <div
+            className={`fixed bottom-6 right-6 flex items-center gap-2 px-4 py-2 rounded-lg shadow-lg transition-all duration-300 ${
+              saveStatus === "saving"
+                ? "bg-blue-50 text-blue-700 border border-blue-200"
+                : saveStatus === "saved"
+                ? "bg-green-50 text-green-700 border border-green-200"
+                : "bg-red-50 text-red-700 border border-red-200"
+            }`}
+          >
+            {saveStatus === "saving" && (
+              <>
+                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-medium">Saving answer...</span>
+              </>
+            )}
+            {saveStatus === "saved" && (
+              <>
+                <CheckCircle2 className="w-4 h-4" />
+                <span className="text-sm font-medium">Answer saved</span>
+              </>
+            )}
+            {saveStatus === "error" && (
+              <>
+                <span className="text-sm font-medium">Save failed (will retry)</span>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
