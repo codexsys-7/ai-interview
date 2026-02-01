@@ -4,7 +4,7 @@ from sqlmodel import SQLModel, Field, create_engine
 import models
 
 from sqlalchemy import Column, JSON
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from decimal import Decimal
 import uuid
@@ -39,7 +39,7 @@ class InterviewSession(SQLModel, table=True):
         primary_key=True,
         index=True
     )
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # high-level metadata
     role: str
@@ -82,5 +82,8 @@ class InterviewAnswer(SQLModel, table=True):
     user_answer: str = Field(nullable=False)
     transcript_raw: Optional[str] = Field(default=None)
     audio_duration_seconds: Optional[Decimal] = Field(default=None)
-    answer_timestamp: datetime = Field(default_factory=datetime.utcnow)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    answer_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Embedding for semantic search (stored as JSON string of float array)
+    embedding: Optional[str] = Field(default=None)

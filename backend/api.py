@@ -8,6 +8,7 @@ from ats import compute_ats_score
 
 import io, json, os, re, logging, tempfile, time, random
 from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
 
 import fitz          
 import docx
@@ -25,6 +26,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 from db import engine, init_db, InterviewSession, InterviewAnswer
+from services.embedding_service import generate_embedding, find_similar_answers
 from models import Resume, User
 
 from passlib.context import CryptContext
@@ -40,8 +42,17 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
 
+# ---------- Lifespan Event Handler ----------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Create tables if they do not exist
+    init_db()
+    yield
+    # Shutdown: Cleanup code would go here if needed
+
+
 # ---------- FastAPI & CORS ----------
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -156,12 +167,6 @@ def login(req: LoginReq):
         token = create_access_token(user.id, user.email)
         return AuthResp(token=token, user={"id": user.id, "full_name": user.full_name, "email": user.email})
 
-
-# This is a startup endpoint
-@app.on_event("startup")
-def on_startup():
-    # Create tables if they do not exist
-    init_db()
 
 # ---------- OpenAI client ----------
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
@@ -1461,6 +1466,44 @@ class SessionDetailResponse(BaseModel):
     created_at: datetime
 
 
+# -------------------- Semantic Search Models --------------------
+# These models handle semantic search for finding similar answers
+# based on embedding similarity within an interview session
+
+class SearchAnswersRequest(BaseModel):
+    """
+    Request model for semantic search across interview answers.
+    Searches within a specific session using embedding similarity.
+    """
+    session_id: str = Field(..., description="UUID of the interview session to search within")
+    query: str = Field(..., description="The search query text (e.g., 'tell me about machine learning')")
+    top_k: int = Field(default=5, ge=1, le=10, description="Number of top similar answers to return (1-10)")
+
+
+class SearchAnswerResult(BaseModel):
+    """
+    A single search result containing the answer and its similarity score.
+    """
+    answer_id: str = Field(..., description="UUID of the matched answer")
+    question_id: int = Field(..., description="The question number in the interview")
+    question_text: str = Field(..., description="The question that was asked")
+    user_answer: str = Field(..., description="The user's response")
+    role: str = Field(..., description="The interviewer role who asked this question")
+    similarity_score: float = Field(..., description="Cosine similarity score (0-1, higher = more similar)")
+
+
+class SearchAnswersResponse(BaseModel):
+    """
+    Response model for semantic search results.
+    Returns answers sorted by similarity (highest first).
+    """
+    success: bool
+    session_id: str
+    query: str
+    total_results: int
+    results: List[SearchAnswerResult]
+
+
 def build_scoring_system_prompt() -> str:
     return (
         "You are a supportive but honest interview coach evaluating a candidate's answers.\n\n"
@@ -1803,7 +1846,17 @@ async def submit_interview_answer(request: SubmitAnswerRequest):
                 detail=f"Interview session with id '{request.session_id}' not found"
             )
 
-    # Step 2: Create and store the InterviewAnswer record
+    # Step 2: Generate embedding for semantic search
+    try:
+        # Combine question and answer for better semantic context
+        text_for_embedding = f"Question: {request.question_text}\nAnswer: {request.user_answer}"
+        embedding = generate_embedding(text_for_embedding)
+        embedding_json = json.dumps(embedding)
+    except Exception as e:
+        logging.warning(f"Failed to generate embedding: {str(e)}. Storing answer without embedding.")
+        embedding_json = None
+
+    # Step 3: Create and store the InterviewAnswer record
     try:
         with Session(engine) as db_session:
             # Create new answer object with all provided data
@@ -1815,7 +1868,8 @@ async def submit_interview_answer(request: SubmitAnswerRequest):
                 role=request.role,
                 user_answer=request.user_answer,
                 transcript_raw=request.transcript_raw,
-                audio_duration_seconds=request.audio_duration_seconds
+                audio_duration_seconds=request.audio_duration_seconds,
+                embedding=embedding_json  # Store the embedding
             )
 
             # Add to database and commit the transaction
@@ -2064,3 +2118,99 @@ async def get_interview_session(session_id: str):
             status_code=500,
             detail="Failed to retrieve interview session. Please try again."
         )
+
+
+# -------------------- Semantic Search Endpoint --------------------
+
+@app.post("/api/interview/search-answers", response_model=SearchAnswersResponse)
+async def search_interview_answers(request: SearchAnswersRequest):
+    """
+    Semantic search for similar answers within an interview session.
+
+    This endpoint:
+    1. Validates that the referenced interview session exists
+    2. Generates an embedding for the search query
+    3. Finds the top_k most similar answers using cosine similarity
+    4. Returns results sorted by similarity score (highest first)
+
+    Use cases:
+    - Find answers related to a specific topic (e.g., "machine learning")
+    - Identify patterns in how candidate answered similar questions
+    - Enable follow-up question generation based on previous answers
+
+    Args:
+        request: SearchAnswersRequest with session_id, query, and top_k
+
+    Returns:
+        SearchAnswersResponse with ranked list of similar answers
+
+    Raises:
+        HTTPException 404: If the session_id doesn't exist
+        HTTPException 400: If the query is empty
+        HTTPException 500: If embedding generation or search fails
+    """
+
+    # Step 1: Validate that the query is not empty
+    if not request.query or not request.query.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Search query cannot be empty"
+        )
+
+    # Step 2: Validate that the interview session exists in the database
+    with Session(engine) as db_session:
+        existing_session = db_session.exec(
+            select(InterviewSession).where(InterviewSession.id == request.session_id)
+        ).first()
+
+        if not existing_session:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interview session with id '{request.session_id}' not found"
+            )
+
+    # Step 3: Generate embedding for the search query
+    try:
+        query_embedding = generate_embedding(request.query)
+    except Exception as e:
+        logging.error(f"Failed to generate query embedding: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to process search query. Please try again."
+        )
+
+    # Step 4: Find similar answers using embedding similarity
+    try:
+        similar_answers = find_similar_answers(
+            session_id=request.session_id,
+            query_embedding=query_embedding,
+            top_k=request.top_k
+        )
+    except Exception as e:
+        logging.error(f"Failed to search answers: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to search answers. Please try again."
+        )
+
+    # Step 5: Transform results to response format
+    results = [
+        SearchAnswerResult(
+            answer_id=answer["answer_id"],
+            question_id=answer["question_id"],
+            question_text=answer["question_text"],
+            user_answer=answer["user_answer"],
+            role=answer["role"],
+            similarity_score=answer["similarity"]
+        )
+        for answer in similar_answers
+    ]
+
+    # Step 6: Return the search results
+    return SearchAnswersResponse(
+        success=True,
+        session_id=request.session_id,
+        query=request.query,
+        total_results=len(results),
+        results=results
+    )

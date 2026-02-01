@@ -14,4 +14,7 @@ pydantic[email]
 
 # Testing dependencies
 pytest
+pytest-mock      # For mocking in tests
+pytest-cov       # For test coverage reports
+pytest-asyncio   # For async test support
 httpx            # Required for FastAPI TestClient

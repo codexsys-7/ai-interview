@@ -156,13 +156,17 @@ def create_test_session(client, session_data):
 # TEST CASES
 # ============================================================================
 
+@pytest.mark.integration
 class TestAnswerStorage:
     """
     Test class for answer storage functionality.
     Groups related tests for the /api/interview/answer/submit endpoint.
+
+    These are integration tests that require a real database connection.
+    They will be skipped if no database is available.
     """
 
-    def test_store_answer_successfully(self, test_client, sample_session_data, sample_answer_data):
+    def test_store_answer_successfully(self, test_client, sample_session_data, sample_answer_data, skip_if_no_database):
         """
         Test Case 1: Verify that an answer saves to the database successfully.
 
@@ -192,7 +196,7 @@ class TestAnswerStorage:
         print(f"✓ Answer stored successfully with ID: {data['answer_id']}")
 
 
-    def test_retrieve_answers_for_session(self, test_client, sample_session_data, multiple_answers_data):
+    def test_retrieve_answers_for_session(self, test_client, sample_session_data, multiple_answers_data, skip_if_no_database):
         """
         Test Case 2: Verify that all answers for a session can be retrieved.
 
@@ -235,7 +239,7 @@ class TestAnswerStorage:
         print(f"✓ Retrieved {data['total_answers']} answers for session {session_id}")
 
 
-    def test_answers_chronological_order(self, test_client, sample_session_data, multiple_answers_data):
+    def test_answers_chronological_order(self, test_client, sample_session_data, multiple_answers_data, skip_if_no_database):
         """
         Test Case 3: Verify that answers are returned in chronological order.
 
@@ -278,7 +282,7 @@ class TestAnswerStorage:
         print(f"✓ Answers are in correct chronological order")
 
 
-    def test_invalid_session_id(self, test_client, sample_answer_data):
+    def test_invalid_session_id(self, test_client, sample_answer_data, skip_if_no_database):
         """
         Test Case 4: Verify that invalid session_id is handled gracefully.
 
@@ -306,7 +310,7 @@ class TestAnswerStorage:
         print(f"✓ Invalid session_id handled gracefully with 404 response")
 
 
-    def test_invalid_answer_data(self, test_client, sample_session_data):
+    def test_invalid_answer_data(self, test_client, sample_session_data, skip_if_no_database):
         """
         Test Case 5: Verify that invalid answer data is validated properly.
 
@@ -361,7 +365,7 @@ class TestAnswerStorage:
         print(f"✓ Invalid answer data is validated and rejected appropriately")
 
 
-    def test_database_only_storage(self, test_client, sample_session_data, multiple_answers_data):
+    def test_database_only_storage(self, test_client, sample_session_data, multiple_answers_data, skip_if_no_database):
         """
         Test Case 6: Verify that answers are stored ONLY in the database,
         not in localStorage, and can be fetched by session_id for feedback.
@@ -476,13 +480,16 @@ class TestAnswerStorage:
         print(f"✓ Database-only storage verified: All data retrievable without localStorage")
 
 
+@pytest.mark.integration
 class TestSessionCreation:
     """
     Test class for session creation functionality.
     Ensures sessions are created correctly before answers can be stored.
+
+    These are integration tests that require a real database connection.
     """
 
-    def test_create_session_successfully(self, test_client, sample_session_data):
+    def test_create_session_successfully(self, test_client, sample_session_data, skip_if_no_database):
         """
         Verify that a new interview session can be created.
         """
@@ -497,7 +504,7 @@ class TestSessionCreation:
         print(f"✓ Session created successfully with ID: {data['session_id']}")
 
 
-    def test_session_stores_plan(self, test_client, sample_session_data):
+    def test_session_stores_plan(self, test_client, sample_session_data, skip_if_no_database):
         """
         Verify that the interview plan is stored with the session.
         This is important for the Feedback page to access question details.
