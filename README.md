@@ -3,6 +3,32 @@
 This update finalizes the Initial MVP for the InterVue Labs AI Interview Simulator.
 We performed a complete cleanup, structural re-organization, and bug-fix pass to prepare the project for public testing and future feature releases.
 
+
+## Architecture🏗️
+mermaid
+graph TD
+    A[🎙️ User Speaks] --> B[OpenAI Whisper\nSpeech to Text]
+    B --> C[FastAPI Backend]
+    C --> D[LangChain Agent]
+    D --> E[Memory Module\nConversation History]
+    D --> F[RAG Pipeline]
+    F --> G[ChromaDB\nVector Store]
+    G --> H[Interview Question Bank\nJob Descriptions / Resumes]
+    D --> I[OpenAI GPT\nLLM Engine]
+    I --> J[Response Generator]
+    J --> K[Text to Speech\nAI Voice Response]
+    K --> L[🧑‍💼 User Hears Feedback]
+    E --> I
+    C --> M[React Frontend\nUI / Dashboard]
+    M --> A
+
+    style A fill:#4ECDC4,color:#000
+    style I fill:#FF6B6B,color:#fff
+    style G fill:#45B7D1,color:#fff
+    style M fill:#96CEB4,color:#000
+    style L fill:#4ECDC4,color:#000
+
+
 ## 🔧 Core Improvements
 ### 1. Full File Cleanup & Refactoring
 
