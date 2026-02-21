@@ -5,7 +5,7 @@ We performed a complete cleanup, structural re-organization, and bug-fix pass to
 
 
 ## Architecture🏗️
-mermaid
+'''mermaid
 graph TD
     A[🎙️ User Speaks] --> B[OpenAI Whisper\nSpeech to Text]
     B --> C[FastAPI Backend]
@@ -27,7 +27,7 @@ graph TD
     style G fill:#45B7D1,color:#fff
     style M fill:#96CEB4,color:#000
     style L fill:#4ECDC4,color:#000
-
+'''
 
 ## 🔧 Core Improvements
 ### 1. Full File Cleanup & Refactoring
