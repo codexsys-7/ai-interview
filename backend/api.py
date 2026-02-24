@@ -8,11 +8,13 @@ from ats import compute_ats_score
 
 import io, json, os, re, logging, tempfile, time, random
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 from contextlib import asynccontextmanager
 
 import fitz          
 import docx
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Response
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Response, Depends
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
 from openai import OpenAI
@@ -25,8 +27,27 @@ from pathlib import Path
 
 
 from sqlmodel import Session, select
-from db import engine, init_db, InterviewSession, InterviewAnswer
+from db import engine, init_db, InterviewSession, InterviewAnswer, JobDescription
 from services.embedding_service import generate_embedding, find_similar_answers
+from services.interview_orchestrator import InterviewOrchestrator
+from services.conversation_context import (
+    get_all_answers,
+    build_conversation_summary,
+    detect_repeated_topics,
+    extract_topics
+)
+from services.contradiction_detector import detect_contradictions
+from services.tts_service import (
+    TTSService,
+    get_tts_service,
+    generate_interview_speech
+)
+from services.job_introduction_generator import (
+    JobIntroductionGenerator,
+    get_job_introduction_generator,
+    generate_job_introduction,
+    IntroductionMode
+)
 from models import Resume, User
 
 from passlib.context import CryptContext
@@ -58,8 +79,11 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "null",  # Allow file:// protocol for testing
     ],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):5173",
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):(5173|8000)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1504,6 +1528,108 @@ class SearchAnswersResponse(BaseModel):
     results: List[SearchAnswerResult]
 
 
+# -------------------- Phase 1.3: Intelligent Interview Flow Models --------------------
+# These models handle the intelligent question generation endpoints
+
+class NextQuestionRequest(BaseModel):
+    """Request model for getting the next contextually-aware question."""
+    session_id: str = Field(..., description="UUID of the interview session")
+    current_question_number: int = Field(..., gt=0, description="Current question number (1-indexed)")
+    role: str = Field(..., description="Job role being interviewed for")
+    difficulty: str = Field(..., description="Interview difficulty level")
+    total_questions: int = Field(default=10, gt=0, description="Total planned questions")
+
+
+class QuestionData(BaseModel):
+    """The generated question data."""
+    id: int = Field(..., description="Question number/ID")
+    text: str = Field(..., description="The question text")
+    intent: str = Field(..., description="Question intent category")
+    type: str = Field(..., description="Question type (standard/follow_up/challenge/deep_dive/reference)")
+
+
+class QuestionReferences(BaseModel):
+    """References to past answers if the question builds on previous context."""
+    question_id: Optional[int] = Field(None, description="ID of referenced question")
+    excerpt: Optional[str] = Field(None, description="Excerpt from referenced answer")
+
+
+class QuestionMetadata(BaseModel):
+    """Metadata about the question generation decision."""
+    decision_reason: str = Field(..., description="Why this question type was chosen")
+    patterns_detected: List[str] = Field(default=[], description="Patterns found in conversation")
+    conversation_stage: str = Field(..., description="Stage of interview (early/mid/late)")
+    action_taken: str = Field(..., description="Action type taken")
+    context_used: Optional[str] = Field(None, description="Context used for generation")
+    generated_at: Optional[str] = Field(None, description="ISO timestamp of generation")
+
+
+class NextQuestionResponse(BaseModel):
+    """Response model for the next question endpoint."""
+    question: QuestionData
+    interviewer_comment: Optional[str] = Field(None, description="Pre-question comment")
+    references: QuestionReferences
+    metadata: QuestionMetadata
+
+
+class SubmitAndNextRequest(BaseModel):
+    """Request model for submitting an answer and getting the next question."""
+    session_id: str = Field(..., description="UUID of the interview session")
+    question_id: int = Field(..., gt=0, description="The question number being answered")
+    question_text: str = Field(..., description="The question that was asked")
+    question_intent: str = Field(..., description="Intent category of the question")
+    role: str = Field(..., description="Job role being interviewed for")
+    user_answer: str = Field(..., description="The user's transcribed response")
+    transcript_raw: Optional[str] = Field(None, description="Full transcript with timestamps")
+    audio_duration_seconds: Optional[float] = Field(None, ge=0, description="Audio duration in seconds")
+    difficulty: str = Field(..., description="Interview difficulty level")
+    total_questions: int = Field(default=10, gt=0, description="Total planned questions")
+
+
+class SubmitAndNextResponse(BaseModel):
+    """Response model for submit-and-next endpoint."""
+    answer_stored: bool = Field(..., description="Whether the answer was stored")
+    answer_id: Optional[str] = Field(None, description="UUID of the stored answer")
+    embedding_generated: Optional[bool] = Field(None, description="Whether embedding was generated")
+    next_question: NextQuestionResponse
+
+
+class ContradictionDetail(BaseModel):
+    """Details about a detected contradiction."""
+    previous_statement: Optional[str] = Field(None, description="Earlier contradicting statement")
+    current_statement: Optional[str] = Field(None, description="Current contradicting statement")
+    contradiction_type: Optional[str] = Field(None, description="Type of contradiction")
+    confidence_score: Optional[float] = Field(None, description="Confidence score (0-1)")
+    explanation: Optional[str] = Field(None, description="Explanation of the contradiction")
+
+
+class QualityMetrics(BaseModel):
+    """Quality metrics for the conversation."""
+    avg_answer_length: float = Field(..., description="Average word count of answers")
+    star_format_usage: float = Field(..., description="Ratio of answers using STAR format")
+    specificity_score: float = Field(..., description="Average specificity score")
+
+
+class ConversationStateResponse(BaseModel):
+    """Response model for conversation state analysis."""
+    total_answers: int = Field(..., description="Number of answers in the session")
+    topics_discussed: List[str] = Field(default=[], description="Topics mentioned in answers")
+    repeated_topics: Dict[str, int] = Field(default={}, description="Topics with mention counts")
+    contradictions_detected: List[ContradictionDetail] = Field(default=[], description="Detected contradictions")
+    conversation_summary: str = Field(..., description="Summary of the conversation")
+    quality_metrics: QualityMetrics
+    recommendations: List[str] = Field(default=[], description="Recommendations for interviewer")
+
+
+class PatternsResponse(BaseModel):
+    """Response model for detected patterns in conversation."""
+    contradictions: List[ContradictionDetail] = Field(default=[], description="Detected contradictions")
+    repeated_topics: Dict[str, int] = Field(default={}, description="Topics with mention counts")
+    weak_answers: List[int] = Field(default=[], description="Question IDs with weak answers")
+    strong_areas: List[str] = Field(default=[], description="Topics where candidate is strong")
+    gaps: List[str] = Field(default=[], description="Expected topics not yet covered")
+
+
 def build_scoring_system_prompt() -> str:
     return (
         "You are a supportive but honest interview coach evaluating a candidate's answers.\n\n"
@@ -1810,7 +1936,7 @@ def score_interview(req: ScoreInterviewReq):
 
 
 # -------------------- Interview Answer Endpoints --------------------
-# Phase 1: Two-way communication - Answer Storage System
+# Phase 1.1: Two-way communication - Answer Storage System
 
 @app.post("/api/interview/answer/submit", response_model=SubmitAnswerResponse)
 async def submit_interview_answer(request: SubmitAnswerRequest):
@@ -2214,3 +2340,2147 @@ async def search_interview_answers(request: SearchAnswersRequest):
         total_results=len(results),
         results=results
     )
+
+
+# -------------------- Phase 1.3: Intelligent Interview Flow Endpoints --------------------
+# These endpoints provide intelligent, context-aware question generation
+
+# Global orchestrator instance (lazy initialization)
+_orchestrator_instance: Optional[InterviewOrchestrator] = None
+
+
+def get_orchestrator() -> InterviewOrchestrator:
+    """Get/create the InterviewOrchestrator instance with lazy initialization."""
+    global _orchestrator_instance
+    if _orchestrator_instance is None:
+        logging.info("Initializing InterviewOrchestrator...")
+        _orchestrator_instance = InterviewOrchestrator()
+        logging.info("InterviewOrchestrator initialized successfully")
+    return _orchestrator_instance
+
+
+def validate_difficulty(difficulty: str) -> str:
+    """Validate and normalize difficulty level."""
+    valid_difficulties = ["easy", "medium", "hard", "junior", "intermediate", "senior", "intern", "associate", "lead"]
+    difficulty_lower = difficulty.lower().strip()
+    if difficulty_lower not in valid_difficulties:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid difficulty '{difficulty}'. Must be one of: {', '.join(valid_difficulties)}"
+        )
+    return difficulty_lower
+
+
+def validate_uuid(uuid_string: str, field_name: str = "session_id") -> str:
+    """Validate UUID format."""
+    import uuid as uuid_module
+    try:
+        uuid_module.UUID(uuid_string)
+        return uuid_string
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name} format. Must be a valid UUID."
+        )
+
+
+@app.post("/api/interview/next-question", response_model=NextQuestionResponse)
+async def get_next_question(request: NextQuestionRequest):
+    """
+    Get next contextually-aware interview question.
+
+    Uses the InterviewOrchestrator to generate intelligent questions based on
+    conversation history, detected patterns, and semantic analysis.
+    """
+    logging.info(f"POST /api/interview/next-question - Session: {request.session_id}, Q#{request.current_question_number}")
+
+    try:
+        # Validate inputs
+        session_id = validate_uuid(request.session_id, "session_id")
+        difficulty = validate_difficulty(request.difficulty)
+
+        # Verify session exists
+        with Session(engine) as db_session:
+            existing_session = db_session.exec(
+                select(InterviewSession).where(InterviewSession.id == session_id)
+            ).first()
+            if not existing_session:
+                raise HTTPException(status_code=404, detail=f"Interview session '{session_id}' not found")
+
+        # Get orchestrator and generate question
+        orchestrator = get_orchestrator()
+        from uuid import UUID as UUIDType
+
+        result = await orchestrator.get_next_question(
+            session_id=UUIDType(session_id),
+            current_question_number=request.current_question_number,
+            role=request.role,
+            difficulty=difficulty,
+            total_questions=request.total_questions
+        )
+
+        logging.info(f"Generated question type: {result.get('question', {}).get('type', 'unknown')}")
+
+        # Transform result to response model
+        question_data = result.get("question", {})
+        references_data = result.get("references", {})
+        metadata_data = result.get("metadata", {})
+
+        return NextQuestionResponse(
+            question=QuestionData(
+                id=question_data.get("id", request.current_question_number),
+                text=question_data.get("text", ""),
+                intent=question_data.get("intent", "general"),
+                type=question_data.get("type", "standard")
+            ),
+            interviewer_comment=result.get("interviewer_comment"),
+            references=QuestionReferences(
+                question_id=references_data.get("question_id"),
+                excerpt=references_data.get("excerpt")
+            ),
+            metadata=QuestionMetadata(
+                decision_reason=metadata_data.get("decision_reason", ""),
+                patterns_detected=metadata_data.get("patterns_detected", []),
+                conversation_stage=metadata_data.get("conversation_stage", "unknown"),
+                action_taken=metadata_data.get("action_taken", "standard"),
+                context_used=metadata_data.get("context_used"),
+                generated_at=metadata_data.get("generated_at")
+            )
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error generating next question: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate next question: {str(e)}")
+
+
+@app.post("/api/interview/submit-and-next", response_model=SubmitAndNextResponse)
+async def submit_answer_and_get_next(request: SubmitAndNextRequest):
+    """
+    Submit an answer AND get the next question in a single call.
+    Provides seamless conversation flow.
+    """
+    logging.info(f"POST /api/interview/submit-and-next - Session: {request.session_id}, Q#{request.question_id}")
+
+    answer_stored = False
+    answer_id = None
+    embedding_generated = False
+
+    try:
+        # Validate inputs
+        session_id = validate_uuid(request.session_id, "session_id")
+        difficulty = validate_difficulty(request.difficulty)
+
+        # Verify session exists
+        with Session(engine) as db_session:
+            existing_session = db_session.exec(
+                select(InterviewSession).where(InterviewSession.id == session_id)
+            ).first()
+            if not existing_session:
+                raise HTTPException(status_code=404, detail=f"Interview session '{session_id}' not found")
+
+        # Store the answer (best effort)
+        try:
+            text_for_embedding = f"Question: {request.question_text}\nAnswer: {request.user_answer}"
+            try:
+                embedding = generate_embedding(text_for_embedding)
+                embedding_json = json.dumps(embedding)
+                embedding_generated = True
+            except Exception as embed_error:
+                logging.warning(f"Failed to generate embedding: {embed_error}")
+                embedding_json = None
+
+            with Session(engine) as db_session:
+                new_answer = InterviewAnswer(
+                    session_id=session_id,
+                    question_id=request.question_id,
+                    question_text=request.question_text,
+                    question_intent=request.question_intent,
+                    role=request.role,
+                    user_answer=request.user_answer,
+                    transcript_raw=request.transcript_raw,
+                    audio_duration_seconds=request.audio_duration_seconds,
+                    embedding=embedding_json
+                )
+                db_session.add(new_answer)
+                db_session.commit()
+                db_session.refresh(new_answer)
+                answer_id = str(new_answer.id)
+                answer_stored = True
+                logging.info(f"Answer stored with ID: {answer_id}")
+        except Exception as store_error:
+            logging.error(f"Failed to store answer: {store_error}")
+
+        # Generate next question
+        orchestrator = get_orchestrator()
+        next_question_number = request.question_id + 1
+        from uuid import UUID as UUIDType
+
+        result = await orchestrator.get_next_question(
+            session_id=UUIDType(session_id),
+            current_question_number=next_question_number,
+            role=request.role,
+            difficulty=difficulty,
+            total_questions=request.total_questions
+        )
+
+        question_data = result.get("question", {})
+        references_data = result.get("references", {})
+        metadata_data = result.get("metadata", {})
+
+        next_question = NextQuestionResponse(
+            question=QuestionData(
+                id=question_data.get("id", next_question_number),
+                text=question_data.get("text", ""),
+                intent=question_data.get("intent", "general"),
+                type=question_data.get("type", "standard")
+            ),
+            interviewer_comment=result.get("interviewer_comment"),
+            references=QuestionReferences(
+                question_id=references_data.get("question_id"),
+                excerpt=references_data.get("excerpt")
+            ),
+            metadata=QuestionMetadata(
+                decision_reason=metadata_data.get("decision_reason", ""),
+                patterns_detected=metadata_data.get("patterns_detected", []),
+                conversation_stage=metadata_data.get("conversation_stage", "unknown"),
+                action_taken=metadata_data.get("action_taken", "standard"),
+                context_used=metadata_data.get("context_used"),
+                generated_at=metadata_data.get("generated_at")
+            )
+        )
+
+        return SubmitAndNextResponse(
+            answer_stored=answer_stored,
+            answer_id=answer_id,
+            embedding_generated=embedding_generated,
+            next_question=next_question
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error in submit-and-next: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process: {str(e)}")
+
+
+@app.get("/api/interview/conversation-state/{session_id}", response_model=ConversationStateResponse)
+async def get_conversation_state(session_id: str):
+    """
+    Get current state of interview conversation.
+    Useful for debugging and monitoring interview quality.
+    """
+    logging.info(f"GET /api/interview/conversation-state/{session_id}")
+
+    try:
+        session_id = validate_uuid(session_id, "session_id")
+
+        # Verify session exists
+        with Session(engine) as db_session:
+            existing_session = db_session.exec(
+                select(InterviewSession).where(InterviewSession.id == session_id)
+            ).first()
+            if not existing_session:
+                raise HTTPException(status_code=404, detail=f"Interview session '{session_id}' not found")
+
+        # Analyze conversation
+        orchestrator = get_orchestrator()
+        from uuid import UUID as UUIDType
+
+        result = await orchestrator.analyze_conversation_state(session_id=UUIDType(session_id))
+        logging.info(f"Conversation state analyzed: {result.get('total_answers', 0)} answers")
+
+        # Transform contradictions
+        contradictions = [
+            ContradictionDetail(
+                previous_statement=c.get("previous_statement"),
+                current_statement=c.get("current_statement"),
+                contradiction_type=c.get("contradiction_type"),
+                confidence_score=c.get("confidence_score"),
+                explanation=c.get("explanation")
+            )
+            for c in result.get("contradictions_detected", [])
+        ]
+
+        raw_metrics = result.get("quality_metrics", {})
+        quality_metrics = QualityMetrics(
+            avg_answer_length=raw_metrics.get("avg_answer_length", 0),
+            star_format_usage=raw_metrics.get("star_format_usage", 0),
+            specificity_score=raw_metrics.get("specificity_score", 0)
+        )
+
+        return ConversationStateResponse(
+            total_answers=result.get("total_answers", 0),
+            topics_discussed=result.get("topics_discussed", []),
+            repeated_topics=result.get("repeated_topics", {}),
+            contradictions_detected=contradictions,
+            conversation_summary=result.get("conversation_summary", ""),
+            quality_metrics=quality_metrics,
+            recommendations=result.get("recommendations", [])
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error analyzing conversation state: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze conversation: {str(e)}")
+
+
+@app.get("/api/interview/patterns/{session_id}", response_model=PatternsResponse)
+async def get_conversation_patterns(session_id: str):
+    """
+    Get detected patterns in conversation.
+    Quick endpoint for pattern analysis.
+    """
+    logging.info(f"GET /api/interview/patterns/{session_id}")
+
+    try:
+        session_id = validate_uuid(session_id, "session_id")
+
+        # Verify session exists
+        with Session(engine) as db_session:
+            existing_session = db_session.exec(
+                select(InterviewSession).where(InterviewSession.id == session_id)
+            ).first()
+            if not existing_session:
+                raise HTTPException(status_code=404, detail=f"Interview session '{session_id}' not found")
+
+        # Get all answers
+        all_answers = get_all_answers(session_id)
+        if not all_answers:
+            return PatternsResponse(
+                contradictions=[],
+                repeated_topics={},
+                weak_answers=[],
+                strong_areas=[],
+                gaps=[]
+            )
+
+        # Detect repeated topics
+        repeated_topics = detect_repeated_topics(session_id)
+
+        # Detect contradictions
+        contradictions = []
+        if len(all_answers) >= 2:
+            last_answer = all_answers[-1]
+            try:
+                raw_contradictions = await detect_contradictions(
+                    session_id,
+                    last_answer.get("user_answer", ""),
+                    last_answer.get("question_text", "")
+                )
+                for c in raw_contradictions:
+                    contradictions.append(ContradictionDetail(
+                        previous_statement=c.get("previous_statement"),
+                        current_statement=c.get("current_statement"),
+                        contradiction_type=c.get("contradiction_type"),
+                        confidence_score=c.get("confidence_score"),
+                        explanation=c.get("explanation")
+                    ))
+            except Exception as e:
+                logging.warning(f"Failed to detect contradictions: {e}")
+
+        # Analyze answer quality
+        weak_answers = []
+        orchestrator = get_orchestrator()
+        for answer in all_answers:
+            quality = orchestrator.decision_engine._analyze_answer_quality(
+                answer.get("user_answer", ""),
+                answer.get("question_intent", "general")
+            )
+            if quality.get("completeness_score", 1) < 0.4 or quality.get("is_vague", False):
+                weak_answers.append(answer.get("question_id", 0))
+
+        # Identify strong areas
+        strong_areas = [topic for topic, count in repeated_topics.items() if count >= 2]
+
+        # Identify gaps
+        expected_topics = ["experience", "skills", "challenges", "achievements", "teamwork"]
+        topics_discussed = extract_topics(session_id)
+        topics_lower = [t.lower() for t in topics_discussed]
+        gaps = [exp for exp in expected_topics if not any(exp in topic for topic in topics_lower)]
+
+        return PatternsResponse(
+            contradictions=contradictions,
+            repeated_topics=repeated_topics,
+            weak_answers=weak_answers,
+            strong_areas=strong_areas,
+            gaps=gaps
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error detecting patterns: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to detect patterns: {str(e)}")
+
+
+# ==================== Phase 1.3: TTS (Text-to-Speech) Endpoints ====================
+
+# TTS Service singleton
+_tts_service: Optional[TTSService] = None
+
+def get_tts() -> TTSService:
+    """Get or create TTS service singleton."""
+    global _tts_service
+    if _tts_service is None:
+        _tts_service = get_tts_service()
+    return _tts_service
+
+
+class TTSGenerateRequest(BaseModel):
+    """Request model for TTS generation."""
+    text: str = Field(..., description="Text to convert to speech", min_length=1, max_length=4096)
+    context: str = Field(
+        default="question",
+        description="Context type: question, acknowledgment, follow_up, challenge, encouragement"
+    )
+    voice: Optional[str] = Field(
+        default=None,
+        description="Voice: alloy, echo, fable, onyx, nova, shimmer"
+    )
+    speed: Optional[float] = Field(
+        default=None,
+        ge=0.25,
+        le=4.0,
+        description="Speech speed (0.25-4.0)"
+    )
+    conversation_stage: str = Field(
+        default="mid",
+        description="Interview stage: early, mid, late"
+    )
+    return_url: bool = Field(
+        default=True,
+        description="If true, return URL to cached file. If false, return base64 audio."
+    )
+
+
+class TTSGenerateResponse(BaseModel):
+    """Response model for TTS generation."""
+    success: bool
+    audio_url: Optional[str] = None
+    audio_base64: Optional[str] = None
+    filename: Optional[str] = None
+    duration_estimate_ms: Optional[int] = None
+    voice_used: str
+    cached: bool = False
+    error: Optional[str] = None
+
+
+@app.post("/api/tts/generate", response_model=TTSGenerateResponse)
+async def generate_tts(request: TTSGenerateRequest):
+    """
+    Generate Text-to-Speech audio from text.
+
+    Converts interviewer text to natural speech using OpenAI TTS API.
+    Supports different voices, speeds, and interview contexts.
+
+    Request body:
+    - text: The text to convert (required, 1-4096 chars)
+    - context: Type of content (question, acknowledgment, follow_up, etc.)
+    - voice: Voice selection (alloy, echo, fable, onyx, nova, shimmer)
+    - speed: Speech rate (0.25 to 4.0)
+    - conversation_stage: Interview stage (early, mid, late)
+    - return_url: If true, return URL; if false, return base64
+
+    Returns:
+    - audio_url: URL to fetch the audio file (if return_url=true)
+    - audio_base64: Base64-encoded audio (if return_url=false)
+    - filename: Name of the cached file
+    - voice_used: Which voice was used
+    - cached: Whether result was from cache
+    """
+    import base64
+
+    logging.info(f"TTS request: {len(request.text)} chars, context={request.context}")
+
+    try:
+        tts = get_tts()
+
+        # Check if should speak this
+        if not tts.should_speak_this(request.text, request.context):
+            logging.info("TTS skipped: should_not_speak")
+            return TTSGenerateResponse(
+                success=False,
+                error="Text should not be spoken (too long, system message, or code)",
+                voice_used="none",
+                cached=False
+            )
+
+        # Generate cache key
+        cache_key = f"{request.context}_{hash(request.text) % 100000}"
+
+        # Build kwargs for generation
+        kwargs = {}
+        if request.voice:
+            kwargs["voice"] = request.voice
+        if request.speed:
+            kwargs["speed"] = request.speed
+
+        # Try to use cached version first
+        try:
+            audio_bytes, file_path = await tts.generate_and_cache(
+                request.text,
+                cache_key,
+                **kwargs
+            )
+            cached = True
+        except Exception:
+            # Fallback to direct generation with context
+            audio_bytes = await tts.generate_for_interview_context(
+                request.text,
+                request.context,
+                request.conversation_stage
+            )
+            # Save to file
+            file_path = await tts.save_audio_file(
+                audio_bytes,
+                cache_key
+            )
+            cached = False
+
+        # Get filename from path
+        filename = Path(file_path).name
+
+        # Determine voice used
+        voice_used = request.voice or tts._select_voice_for_context(request.context)
+
+        # Estimate duration (rough: ~150 words per minute, ~5 chars per word)
+        word_count = len(request.text.split())
+        duration_estimate_ms = int((word_count / 150) * 60 * 1000)
+
+        if request.return_url:
+            # Return URL to audio file
+            audio_url = f"/api/audio/{filename}"
+            return TTSGenerateResponse(
+                success=True,
+                audio_url=audio_url,
+                filename=filename,
+                duration_estimate_ms=duration_estimate_ms,
+                voice_used=voice_used,
+                cached=cached
+            )
+        else:
+            # Return base64-encoded audio
+            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+            return TTSGenerateResponse(
+                success=True,
+                audio_base64=audio_base64,
+                filename=filename,
+                duration_estimate_ms=duration_estimate_ms,
+                voice_used=voice_used,
+                cached=cached
+            )
+
+    except Exception as e:
+        logging.exception(f"TTS generation failed: {str(e)}")
+        return TTSGenerateResponse(
+            success=False,
+            error=str(e),
+            voice_used="none",
+            cached=False
+        )
+
+
+@app.get("/api/audio/{filename}")
+async def serve_audio(filename: str):
+    """
+    Serve cached audio files.
+
+    Returns the audio file for playback in the browser.
+    Supports MP3 format with proper MIME type.
+
+    Path params:
+    - filename: Name of the audio file (e.g., "question_12345_abc123.mp3")
+
+    Returns:
+    - Audio file with Content-Type: audio/mpeg
+    """
+    # Validate filename (security: prevent path traversal)
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Only allow .mp3 files
+    if not filename.endswith(".mp3"):
+        raise HTTPException(status_code=400, detail="Only MP3 files are supported")
+
+    # Build file path
+    audio_dir = Path("audio_cache")
+    file_path = audio_dir / filename
+
+    # Check if file exists
+    if not file_path.exists():
+        logging.warning(f"Audio file not found: {filename}")
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    # Serve the file
+    return FileResponse(
+        path=str(file_path),
+        media_type="audio/mpeg",
+        filename=filename,
+        headers={
+            "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+            "Accept-Ranges": "bytes"  # Support partial content for seeking
+        }
+    )
+
+
+class TTSBatchRequest(BaseModel):
+    """Request model for batch TTS generation."""
+    items: List[Dict[str, str]] = Field(
+        ...,
+        description="List of items: [{text, context, id}, ...]"
+    )
+    max_concurrent: int = Field(default=3, ge=1, le=5)
+
+
+class TTSBatchItemResult(BaseModel):
+    """Result for a single batch item."""
+    id: str
+    success: bool
+    audio_url: Optional[str] = None
+    error: Optional[str] = None
+
+
+class TTSBatchResponse(BaseModel):
+    """Response model for batch TTS generation."""
+    success: bool
+    results: List[TTSBatchItemResult]
+    total: int
+    successful: int
+    failed: int
+
+
+@app.post("/api/tts/batch", response_model=TTSBatchResponse)
+async def generate_tts_batch(request: TTSBatchRequest):
+    """
+    Generate TTS for multiple texts in batch.
+
+    Useful for pre-generating audio for multiple questions.
+
+    Request body:
+    - items: List of {text, context, id} objects
+    - max_concurrent: Max concurrent API calls (1-5)
+
+    Returns:
+    - results: List of results with audio URLs
+    - total/successful/failed counts
+    """
+    logging.info(f"TTS batch request: {len(request.items)} items")
+
+    try:
+        tts = get_tts()
+
+        # Generate batch
+        raw_results = await tts.generate_batch(
+            request.items,
+            max_concurrent=request.max_concurrent
+        )
+
+        # Format results
+        results = []
+        successful = 0
+        failed = 0
+
+        for result in raw_results:
+            item_id = result.get("id", "unknown")
+
+            if result.get("success"):
+                file_path = result.get("file_path", "")
+                filename = Path(file_path).name if file_path else None
+                audio_url = f"/api/audio/{filename}" if filename else None
+
+                results.append(TTSBatchItemResult(
+                    id=item_id,
+                    success=True,
+                    audio_url=audio_url
+                ))
+                successful += 1
+            else:
+                results.append(TTSBatchItemResult(
+                    id=item_id,
+                    success=False,
+                    error=result.get("error", result.get("reason", "Unknown error"))
+                ))
+                failed += 1
+
+        return TTSBatchResponse(
+            success=failed == 0,
+            results=results,
+            total=len(request.items),
+            successful=successful,
+            failed=failed
+        )
+
+    except Exception as e:
+        logging.exception(f"TTS batch generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Batch TTS failed: {str(e)}")
+
+
+# ==================== Phase 1.3: Real-time Conversational Endpoints ====================
+# These endpoints enable full voice conversation experience with TTS support
+
+# ---------- Pydantic Models for Real-time Conversation ----------
+
+class SubmitAnswerRealtimeRequest(BaseModel):
+    """Request model for submitting answer with real-time AI response."""
+    session_id: str = Field(..., description="Interview session UUID")
+    question_id: int = Field(..., ge=1, description="Current question number")
+    question_text: str = Field(..., min_length=1, description="The question that was asked")
+    question_intent: str = Field(default="behavioral", description="Question intent type")
+    role: str = Field(..., min_length=1, description="Job role being interviewed for")
+    user_answer: str = Field(..., min_length=1, description="User's answer text")
+    transcript_raw: Optional[str] = Field(default=None, description="Raw transcript from STT")
+    audio_duration_seconds: Optional[float] = Field(default=None, ge=0, description="Duration of audio answer")
+    difficulty: str = Field(default="medium", description="Interview difficulty level")
+    total_questions: int = Field(default=10, ge=1, le=50, description="Total planned questions")
+    generate_audio: bool = Field(default=True, description="Whether to generate TTS audio")
+
+
+class AcknowledgmentModel(BaseModel):
+    """Model for AI acknowledgment response."""
+    text: str
+    audio_url: Optional[str] = None
+    should_speak: bool = True
+    tone: str = "neutral"
+
+
+class FollowUpProbeModel(BaseModel):
+    """Model for follow-up probe."""
+    text: str
+    audio_url: Optional[str] = None
+    probe_type: str = "specific"
+    missing_element: Optional[str] = None
+
+
+class TransitionModel(BaseModel):
+    """Model for transition between questions."""
+    text: str
+    audio_url: Optional[str] = None
+
+
+class AIResponseModel(BaseModel):
+    """Model for complete AI response."""
+    acknowledgment: Optional[AcknowledgmentModel] = None
+    follow_up_probe: Optional[FollowUpProbeModel] = None
+    transition: Optional[TransitionModel] = None
+
+
+class FlowControlModel(BaseModel):
+    """Model for conversation flow control."""
+    should_proceed_to_next: bool
+    needs_follow_up: bool
+    quality_sufficient: bool
+    conversation_stage: str
+
+
+class QuestionWithAudioModel(BaseModel):
+    """Model for question with optional audio."""
+    id: int
+    text: str
+    intent: str
+    type: str
+    audio_url: Optional[str] = None
+
+
+class NextQuestionWithAudioModel(BaseModel):
+    """Model for next question response with audio."""
+    question: QuestionWithAudioModel
+    interviewer_comment: Optional[str] = None
+    interviewer_comment_audio_url: Optional[str] = None
+    references: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class SubmitAnswerRealtimeResponse(BaseModel):
+    """Response model for real-time answer submission."""
+    answer_stored: bool
+    answer_id: Optional[str] = None
+    ai_response: AIResponseModel
+    next_question: Optional[NextQuestionWithAudioModel] = None
+    flow_control: FlowControlModel
+    quality_metrics: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+class SubmitFollowUpRequest(BaseModel):
+    """Request model for submitting follow-up answer."""
+    session_id: str = Field(..., description="Interview session UUID")
+    original_question_id: int = Field(..., ge=1, description="Original question ID")
+    original_question_text: str = Field(..., description="Original question text")
+    original_question_intent: str = Field(default="behavioral", description="Original question intent")
+    follow_up_answer: str = Field(..., min_length=1, description="User's follow-up elaboration")
+    role: str = Field(..., description="Job role")
+    difficulty: str = Field(default="medium", description="Difficulty level")
+    total_questions: int = Field(default=10, description="Total questions")
+    generate_audio: bool = Field(default=True, description="Generate TTS audio")
+
+
+class SubmitFollowUpResponse(BaseModel):
+    """Response model for follow-up submission."""
+    follow_up_stored: bool
+    answer_id: Optional[str] = None
+    is_follow_up_response: bool = True
+    original_question_id: int
+    follow_up_attempt: int
+    ai_response: AIResponseModel
+    next_question: Optional[NextQuestionWithAudioModel] = None
+    flow_control: FlowControlModel
+    quality_metrics: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+class StartInterviewWithAudioRequest(BaseModel):
+    """Request model for starting interview with audio."""
+    session_id: str = Field(..., description="Interview session UUID")
+    role: str = Field(..., min_length=1, description="Job role")
+    difficulty: str = Field(default="medium", description="Difficulty level")
+    total_questions: int = Field(default=10, ge=1, le=50, description="Total questions")
+    generate_audio: bool = Field(default=True, description="Generate TTS audio")
+
+
+class StartInterviewWithAudioResponse(BaseModel):
+    """Response model for interview start with audio."""
+    interview_started: bool
+    session_id: str
+    first_question: Optional[NextQuestionWithAudioModel] = None
+    error: Optional[str] = None
+
+
+class RegenerateAudioRequest(BaseModel):
+    """Request model for regenerating audio."""
+    text: str = Field(..., min_length=1, max_length=4096, description="Text to convert")
+    context_type: str = Field(default="question", description="Context type for TTS")
+    voice: Optional[str] = Field(default=None, description="Voice selection")
+    conversation_stage: str = Field(default="mid", description="Conversation stage")
+    force_regenerate: bool = Field(default=False, description="Force regeneration even if cached")
+
+
+class RegenerateAudioResponse(BaseModel):
+    """Response model for audio regeneration."""
+    audio_generated: bool
+    audio_url: Optional[str] = None
+    cached: bool = False
+    error: Optional[str] = None
+
+
+class AudioStatusResponse(BaseModel):
+    """Response model for audio status."""
+    session_id: str
+    cache_stats: Dict[str, Any]
+
+
+class ClearCacheRequest(BaseModel):
+    """Request model for clearing cache."""
+    older_than_days: int = Field(default=7, ge=1, le=365, description="Delete files older than X days")
+
+
+class ClearCacheResponse(BaseModel):
+    """Response model for cache clearing."""
+    files_deleted: int
+    space_freed_mb: float
+
+
+# ---------- Real-time Conversational Endpoints ----------
+
+@app.post("/api/interview/submit-answer-realtime", response_model=SubmitAnswerRealtimeResponse)
+async def submit_answer_realtime(request: SubmitAnswerRealtimeRequest):
+    """
+    Submit answer and get immediate AI response with audio.
+
+    This is the MAIN endpoint for conversational interviews with TTS support.
+    Processes the answer, analyzes quality, generates AI response with audio,
+    and returns the next question (if ready to proceed).
+
+    Flow:
+    1. Validate inputs
+    2. Process answer through orchestrator
+    3. Generate AI response (acknowledgment, probe, transition)
+    4. Convert responses to audio (if generate_audio=True)
+    5. Generate next question with audio (if should_proceed)
+    6. Return comprehensive response
+    """
+    start_time = time.time()
+    logging.info(f"POST /api/interview/submit-answer-realtime - Session: {request.session_id}, Q{request.question_id}")
+
+    try:
+        # Validate session_id
+        validate_uuid(request.session_id, "session_id")
+
+        # Validate difficulty
+        difficulty = validate_difficulty(request.difficulty)
+
+        # Get orchestrator
+        orchestrator = get_orchestrator()
+
+        # Build answer data
+        answer_data = {
+            "question_id": request.question_id,
+            "question_text": request.question_text,
+            "question_intent": request.question_intent,
+            "user_answer": request.user_answer,
+            "transcript_raw": request.transcript_raw or request.user_answer,
+            "audio_duration_seconds": request.audio_duration_seconds or 0
+        }
+
+        # Process answer with real-time response
+        result = await orchestrator.process_answer_with_realtime_response(
+            session_id=UUID(request.session_id),
+            answer_data=answer_data,
+            role=request.role,
+            difficulty=difficulty,
+            total_questions=request.total_questions,
+            generate_audio=request.generate_audio
+        )
+
+        # Build response models
+        ai_response_data = result.get("ai_response", {})
+        ai_response = AIResponseModel(
+            acknowledgment=AcknowledgmentModel(**ai_response_data["acknowledgment"]) if ai_response_data.get("acknowledgment") else None,
+            follow_up_probe=FollowUpProbeModel(**ai_response_data["follow_up_probe"]) if ai_response_data.get("follow_up_probe") else None,
+            transition=TransitionModel(**ai_response_data["transition"]) if ai_response_data.get("transition") else None
+        )
+
+        flow_control_data = result.get("flow_control", {})
+        flow_control = FlowControlModel(
+            should_proceed_to_next=flow_control_data.get("should_proceed_to_next", True),
+            needs_follow_up=flow_control_data.get("needs_follow_up", False),
+            quality_sufficient=flow_control_data.get("quality_sufficient", True),
+            conversation_stage=flow_control_data.get("conversation_stage", "mid")
+        )
+
+        # Build next question model if present
+        next_question = None
+        if result.get("next_question"):
+            nq = result["next_question"]
+            q = nq.get("question", {})
+            next_question = NextQuestionWithAudioModel(
+                question=QuestionWithAudioModel(
+                    id=q.get("id", request.question_id + 1),
+                    text=q.get("text", ""),
+                    intent=q.get("intent", "general"),
+                    type=q.get("type", "standard"),
+                    audio_url=q.get("audio_url")
+                ),
+                interviewer_comment=nq.get("interviewer_comment"),
+                interviewer_comment_audio_url=nq.get("interviewer_comment_audio_url"),
+                references=nq.get("references"),
+                metadata=nq.get("metadata")
+            )
+
+        elapsed = time.time() - start_time
+        logging.info(f"Submit-answer-realtime completed in {elapsed:.2f}s - Proceed: {flow_control.should_proceed_to_next}")
+
+        return SubmitAnswerRealtimeResponse(
+            answer_stored=result.get("answer_stored", True),
+            answer_id=result.get("answer_id"),
+            ai_response=ai_response,
+            next_question=next_question,
+            flow_control=flow_control,
+            quality_metrics=result.get("quality_metrics"),
+            error=result.get("error")
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error in submit-answer-realtime: {str(e)}")
+        # Return graceful error response
+        return SubmitAnswerRealtimeResponse(
+            answer_stored=False,
+            answer_id=None,
+            ai_response=AIResponseModel(
+                acknowledgment=AcknowledgmentModel(
+                    text="Thank you for your response.",
+                    audio_url=None,
+                    should_speak=True,
+                    tone="neutral"
+                ),
+                follow_up_probe=None,
+                transition=None
+            ),
+            next_question=None,
+            flow_control=FlowControlModel(
+                should_proceed_to_next=True,
+                needs_follow_up=False,
+                quality_sufficient=True,
+                conversation_stage="mid"
+            ),
+            error=str(e)
+        )
+
+
+@app.post("/api/interview/submit-followup", response_model=SubmitFollowUpResponse)
+async def submit_followup(request: SubmitFollowUpRequest):
+    """
+    Submit answer to follow-up probe.
+
+    Used when AI asked for more detail and user elaborates.
+    Combines with original answer for quality assessment.
+    """
+    logging.info(f"POST /api/interview/submit-followup - Session: {request.session_id}, Q{request.original_question_id}")
+
+    try:
+        # Validate inputs
+        validate_uuid(request.session_id, "session_id")
+        difficulty = validate_difficulty(request.difficulty)
+
+        # Get orchestrator
+        orchestrator = get_orchestrator()
+
+        # Handle follow-up answer
+        result = await orchestrator.handle_follow_up_answer(
+            session_id=UUID(request.session_id),
+            follow_up_answer=request.follow_up_answer,
+            original_question_id=request.original_question_id,
+            original_question_text=request.original_question_text,
+            original_question_intent=request.original_question_intent,
+            role=request.role,
+            difficulty=difficulty,
+            total_questions=request.total_questions,
+            generate_audio=request.generate_audio
+        )
+
+        # Build response models
+        ai_response_data = result.get("ai_response", {})
+        ai_response = AIResponseModel(
+            acknowledgment=AcknowledgmentModel(**ai_response_data["acknowledgment"]) if ai_response_data.get("acknowledgment") else None,
+            follow_up_probe=FollowUpProbeModel(**ai_response_data["follow_up_probe"]) if ai_response_data.get("follow_up_probe") else None,
+            transition=TransitionModel(**ai_response_data["transition"]) if ai_response_data.get("transition") else None
+        )
+
+        flow_control_data = result.get("flow_control", {})
+        flow_control = FlowControlModel(
+            should_proceed_to_next=flow_control_data.get("should_proceed_to_next", True),
+            needs_follow_up=flow_control_data.get("needs_follow_up", False),
+            quality_sufficient=flow_control_data.get("quality_sufficient", True),
+            conversation_stage=flow_control_data.get("conversation_stage", "mid")
+        )
+
+        # Build next question model if present
+        next_question = None
+        if result.get("next_question"):
+            nq = result["next_question"]
+            q = nq.get("question", {})
+            next_question = NextQuestionWithAudioModel(
+                question=QuestionWithAudioModel(
+                    id=q.get("id", request.original_question_id + 1),
+                    text=q.get("text", ""),
+                    intent=q.get("intent", "general"),
+                    type=q.get("type", "standard"),
+                    audio_url=q.get("audio_url")
+                ),
+                interviewer_comment=nq.get("interviewer_comment"),
+                interviewer_comment_audio_url=nq.get("interviewer_comment_audio_url"),
+                references=nq.get("references"),
+                metadata=nq.get("metadata")
+            )
+
+        logging.info(f"Follow-up processed - Proceed: {flow_control.should_proceed_to_next}")
+
+        return SubmitFollowUpResponse(
+            follow_up_stored=True,
+            answer_id=result.get("answer_id"),
+            is_follow_up_response=True,
+            original_question_id=request.original_question_id,
+            follow_up_attempt=result.get("follow_up_attempt", 1),
+            ai_response=ai_response,
+            next_question=next_question,
+            flow_control=flow_control,
+            quality_metrics=result.get("quality_metrics"),
+            error=result.get("error")
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error in submit-followup: {str(e)}")
+        return SubmitFollowUpResponse(
+            follow_up_stored=False,
+            answer_id=None,
+            is_follow_up_response=True,
+            original_question_id=request.original_question_id,
+            follow_up_attempt=1,
+            ai_response=AIResponseModel(
+                acknowledgment=AcknowledgmentModel(
+                    text="Thank you for that clarification.",
+                    audio_url=None,
+                    should_speak=True,
+                    tone="neutral"
+                ),
+                follow_up_probe=None,
+                transition=None
+            ),
+            next_question=None,
+            flow_control=FlowControlModel(
+                should_proceed_to_next=True,
+                needs_follow_up=False,
+                quality_sufficient=True,
+                conversation_stage="mid"
+            ),
+            error=str(e)
+        )
+
+
+@app.post("/api/interview/start-with-audio", response_model=StartInterviewWithAudioResponse)
+async def start_interview_with_audio(request: StartInterviewWithAudioRequest):
+    """
+    Start interview and get first question with audio.
+
+    Enhanced version of interview start with TTS support.
+    Returns the first question with optional audio URL.
+    """
+    logging.info(f"POST /api/interview/start-with-audio - Session: {request.session_id}, Role: {request.role}")
+
+    try:
+        # Validate inputs
+        validate_uuid(request.session_id, "session_id")
+        difficulty = validate_difficulty(request.difficulty)
+
+        # Get orchestrator
+        orchestrator = get_orchestrator()
+
+        # Generate first question with audio
+        first_question_result = await orchestrator.generate_question_with_audio(
+            session_id=UUID(request.session_id),
+            current_question_number=1,
+            role=request.role,
+            difficulty=difficulty,
+            total_questions=request.total_questions,
+            generate_audio=request.generate_audio
+        )
+
+        # Build response
+        q = first_question_result.get("question", {})
+        first_question = NextQuestionWithAudioModel(
+            question=QuestionWithAudioModel(
+                id=q.get("id", 1),
+                text=q.get("text", "Tell me about yourself."),
+                intent=q.get("intent", "introduction"),
+                type=q.get("type", "standard"),
+                audio_url=q.get("audio_url")
+            ),
+            interviewer_comment=first_question_result.get("interviewer_comment"),
+            interviewer_comment_audio_url=first_question_result.get("interviewer_comment_audio_url"),
+            references=first_question_result.get("references"),
+            metadata=first_question_result.get("metadata")
+        )
+
+        logging.info(f"Interview started with audio - Q1 audio: {q.get('audio_url')}")
+
+        return StartInterviewWithAudioResponse(
+            interview_started=True,
+            session_id=request.session_id,
+            first_question=first_question
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error in start-with-audio: {str(e)}")
+        return StartInterviewWithAudioResponse(
+            interview_started=False,
+            session_id=request.session_id,
+            first_question=None,
+            error=str(e)
+        )
+
+
+@app.post("/api/interview/regenerate-audio", response_model=RegenerateAudioResponse)
+async def regenerate_audio(request: RegenerateAudioRequest):
+    """
+    Regenerate audio for existing text.
+
+    Useful for changing voices, fixing audio issues, or cache refresh.
+    """
+    logging.info(f"POST /api/interview/regenerate-audio - Context: {request.context_type}, Force: {request.force_regenerate}")
+
+    try:
+        tts = get_tts()
+
+        # Check if should speak this text
+        if not tts.should_speak_this(request.text, request.context_type):
+            return RegenerateAudioResponse(
+                audio_generated=False,
+                audio_url=None,
+                cached=False,
+                error="Text should not be spoken (too long, code, or system message)"
+            )
+
+        # Generate audio
+        kwargs = {}
+        if request.voice:
+            kwargs["voice"] = request.voice
+
+        if request.force_regenerate:
+            # Direct generation without cache
+            audio_bytes = await tts.generate_for_interview_context(
+                request.text,
+                context_type=request.context_type,
+                conversation_stage=request.conversation_stage
+            )
+            # Save with unique name
+            import uuid
+            filename = f"regen_{uuid.uuid4().hex[:8]}"
+            file_path = await tts.save_audio_file(audio_bytes, filename)
+            audio_url = f"/api/audio/{Path(file_path).name}"
+            cached = False
+        else:
+            # Use cache
+            cache_key = f"regen_{hash(request.text) % 100000}"
+            audio_bytes, file_path = await tts.generate_and_cache(
+                request.text,
+                cache_key,
+                **kwargs
+            )
+            audio_url = f"/api/audio/{Path(file_path).name}"
+            cached = True
+
+        logging.info(f"Audio regenerated: {audio_url}")
+
+        return RegenerateAudioResponse(
+            audio_generated=True,
+            audio_url=audio_url,
+            cached=cached
+        )
+
+    except Exception as e:
+        logging.exception(f"Error regenerating audio: {str(e)}")
+        return RegenerateAudioResponse(
+            audio_generated=False,
+            audio_url=None,
+            cached=False,
+            error=str(e)
+        )
+
+
+@app.get("/api/interview/audio-status/{session_id}", response_model=AudioStatusResponse)
+async def get_audio_status(session_id: str):
+    """
+    Get audio generation status and cache statistics.
+
+    Shows cache size and stats for monitoring.
+    """
+    logging.info(f"GET /api/interview/audio-status/{session_id}")
+
+    try:
+        validate_uuid(session_id, "session_id")
+
+        tts = get_tts()
+        cache_stats = tts.get_cache_stats()
+
+        return AudioStatusResponse(
+            session_id=session_id,
+            cache_stats=cache_stats
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error getting audio status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/audio/cache/clear", response_model=ClearCacheResponse)
+async def clear_audio_cache(request: ClearCacheRequest):
+    """
+    Clear old audio cache files.
+
+    Removes audio files older than specified days.
+    Admin/maintenance endpoint.
+    """
+    logging.info(f"DELETE /api/audio/cache/clear - Older than {request.older_than_days} days")
+
+    try:
+        from datetime import datetime, timedelta
+        import os
+
+        cache_dir = Path("audio_cache")
+        if not cache_dir.exists():
+            return ClearCacheResponse(files_deleted=0, space_freed_mb=0.0)
+
+        cutoff_time = datetime.now() - timedelta(days=request.older_than_days)
+        files_deleted = 0
+        space_freed = 0
+
+        for file_path in cache_dir.glob("*.mp3"):
+            try:
+                file_stat = file_path.stat()
+                file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
+
+                if file_mtime < cutoff_time:
+                    space_freed += file_stat.st_size
+                    file_path.unlink()
+                    files_deleted += 1
+
+            except Exception as e:
+                logging.warning(f"Failed to delete {file_path}: {e}")
+
+        space_freed_mb = round(space_freed / (1024 * 1024), 2)
+
+        logging.info(f"Cache cleared: {files_deleted} files, {space_freed_mb} MB freed")
+
+        return ClearCacheResponse(
+            files_deleted=files_deleted,
+            space_freed_mb=space_freed_mb
+        )
+
+    except Exception as e:
+        logging.exception(f"Error clearing cache: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Job Introduction Generator Endpoints ====================
+
+class JobDescriptionInput(BaseModel):
+    """Job description input for introduction generation."""
+    company_name: str = Field(..., description="Name of the company")
+    job_title: str = Field(..., description="Job title/position")
+    team_name: Optional[str] = Field(None, description="Team name if applicable")
+    location: Optional[str] = Field(None, description="Job location")
+    responsibilities: List[str] = Field(default=[], description="List of job responsibilities")
+    requirements: List[str] = Field(default=[], description="List of required qualifications")
+    nice_to_have: List[str] = Field(default=[], description="List of preferred qualifications")
+    company_description: Optional[str] = Field(None, description="Brief company description")
+    role_description: Optional[str] = Field(None, description="Full role description text")
+
+
+class GenerateIntroductionRequest(BaseModel):
+    """Request for generating job introduction."""
+    job_description: JobDescriptionInput
+    candidate_name: Optional[str] = Field(None, description="Candidate name for personalization")
+    candidate_resume_summary: Optional[str] = Field(None, description="Resume summary for personalization")
+    mode: str = Field(default="concise", description="Introduction mode: 'concise' (30-45s) or 'detailed' (60-90s)")
+    include_first_question: bool = Field(default=True, description="Include personalized first question")
+    generate_audio: bool = Field(default=True, description="Generate TTS audio for segments")
+
+
+class IntroductionSegment(BaseModel):
+    """A single introduction segment."""
+    segment_type: str
+    text: str
+    order: int
+    duration_estimate_seconds: float
+    audio_url: Optional[str] = None
+
+
+class FirstQuestionOutput(BaseModel):
+    """First question output."""
+    segment_type: str
+    text: str
+    order: int
+    duration_estimate_seconds: float
+    audio_url: Optional[str] = None
+
+
+class GenerateIntroductionResponse(BaseModel):
+    """Response from introduction generation."""
+    segments: List[IntroductionSegment]
+    first_question: Optional[FirstQuestionOutput] = None
+    total_duration_seconds: float
+    mode: str
+    error: Optional[str] = None
+
+
+@app.post("/api/interview/generate-introduction", response_model=GenerateIntroductionResponse)
+async def generate_interview_introduction(request: GenerateIntroductionRequest):
+    """
+    Generate a warm, professional introduction for a job-specific interview.
+
+    This creates a complete opening sequence including:
+    - Greeting (personalized if name provided)
+    - Role overview
+    - Key responsibilities
+    - Requirements summary
+    - Transition to interview
+
+    Each segment can include TTS audio.
+
+    Example request:
+    ```json
+    {
+        "job_description": {
+            "company_name": "Google",
+            "job_title": "Senior Software Engineer",
+            "team_name": "Backend Infrastructure Team",
+            "responsibilities": ["Build scalable systems", "Design APIs"],
+            "requirements": ["5+ years Python", "System design skills"]
+        },
+        "candidate_name": "Alex",
+        "mode": "concise",
+        "generate_audio": true
+    }
+    ```
+    """
+    logging.info(f"POST /api/interview/generate-introduction - {request.job_description.job_title} at {request.job_description.company_name}")
+
+    try:
+        # Convert Pydantic model to dict
+        job_dict = {
+            "company_name": request.job_description.company_name,
+            "job_title": request.job_description.job_title,
+            "team_name": request.job_description.team_name,
+            "location": request.job_description.location,
+            "responsibilities": request.job_description.responsibilities,
+            "requirements": request.job_description.requirements,
+            "nice_to_have": request.job_description.nice_to_have,
+            "company_description": request.job_description.company_description,
+            "role_description": request.job_description.role_description,
+        }
+
+        # Generate introduction
+        result = await generate_job_introduction(
+            job_description=job_dict,
+            candidate_name=request.candidate_name,
+            candidate_resume_summary=request.candidate_resume_summary,
+            mode=request.mode,
+            include_first_question=request.include_first_question,
+            generate_audio=request.generate_audio
+        )
+
+        # Convert segments to response model
+        segments = [
+            IntroductionSegment(
+                segment_type=s.get("segment_type", ""),
+                text=s.get("text", ""),
+                order=s.get("order", 0),
+                duration_estimate_seconds=s.get("duration_estimate_seconds", 0),
+                audio_url=s.get("audio_url")
+            )
+            for s in result.get("segments", [])
+        ]
+
+        # Convert first question if present
+        first_question = None
+        if result.get("first_question"):
+            fq = result["first_question"]
+            first_question = FirstQuestionOutput(
+                segment_type=fq.get("segment_type", "first_question"),
+                text=fq.get("text", ""),
+                order=fq.get("order", 0),
+                duration_estimate_seconds=fq.get("duration_estimate_seconds", 0),
+                audio_url=fq.get("audio_url")
+            )
+
+        return GenerateIntroductionResponse(
+            segments=segments,
+            first_question=first_question,
+            total_duration_seconds=result.get("total_duration_seconds", 0),
+            mode=result.get("mode", request.mode)
+        )
+
+    except Exception as e:
+        logging.exception(f"Error generating introduction: {str(e)}")
+        return GenerateIntroductionResponse(
+            segments=[],
+            first_question=None,
+            total_duration_seconds=0,
+            mode=request.mode,
+            error=str(e)
+        )
+
+
+class GenerateFirstQuestionRequest(BaseModel):
+    """Request for generating personalized first question only."""
+    job_description: JobDescriptionInput
+    candidate_resume_summary: Optional[str] = Field(None, description="Resume summary for personalization")
+    generate_audio: bool = Field(default=True, description="Generate TTS audio")
+
+
+class GenerateFirstQuestionResponse(BaseModel):
+    """Response with personalized first question."""
+    question_text: str
+    audio_url: Optional[str] = None
+    duration_estimate_seconds: float = 8.0
+    error: Optional[str] = None
+
+
+@app.post("/api/interview/generate-first-question", response_model=GenerateFirstQuestionResponse)
+async def generate_personalized_first_question(request: GenerateFirstQuestionRequest):
+    """
+    Generate a personalized first interview question tied to the job description.
+
+    Instead of generic "Tell me about yourself", creates a question
+    that immediately ties to the role.
+
+    Example output:
+    "Tell me about yourself and specifically what attracted you to
+    the Senior Software Engineer position at Google."
+    """
+    logging.info(f"POST /api/interview/generate-first-question - {request.job_description.job_title}")
+
+    try:
+        # Convert to dict
+        job_dict = {
+            "company_name": request.job_description.company_name,
+            "job_title": request.job_description.job_title,
+            "requirements": request.job_description.requirements,
+        }
+
+        # Get generator
+        generator = get_job_introduction_generator()
+
+        # Generate question
+        question_text = await generator.generate_personalized_first_question(
+            job_description=job_dict,
+            candidate_resume_summary=request.candidate_resume_summary
+        )
+
+        audio_url = None
+
+        # Generate audio if requested
+        if request.generate_audio:
+            try:
+                tts = get_tts_service()
+                import hashlib
+                text_hash = hashlib.md5(question_text.encode()).hexdigest()[:8]
+                cache_key = f"first_question_{text_hash}"
+
+                audio_bytes, audio_path = await tts.generate_and_cache(
+                    text=question_text,
+                    cache_key=cache_key,
+                    voice="alloy",
+                    speed=0.9
+                )
+
+                if audio_path:
+                    import os
+                    filename = os.path.basename(audio_path)
+                    audio_url = f"/api/audio/{filename}"
+
+            except Exception as e:
+                logging.warning(f"Failed to generate audio for first question: {e}")
+
+        return GenerateFirstQuestionResponse(
+            question_text=question_text,
+            audio_url=audio_url,
+            duration_estimate_seconds=8.0
+        )
+
+    except Exception as e:
+        logging.exception(f"Error generating first question: {str(e)}")
+        return GenerateFirstQuestionResponse(
+            question_text="Tell me about yourself.",
+            audio_url=None,
+            error=str(e)
+        )
+
+
+# ==================== Job Description Interview Start Endpoints ====================
+
+# Dependency injection helpers
+def get_orchestrator() -> InterviewOrchestrator:
+    """Get or create InterviewOrchestrator instance."""
+    return InterviewOrchestrator()
+
+
+def get_job_intro_generator() -> JobIntroductionGenerator:
+    """Get or create JobIntroductionGenerator instance."""
+    return get_job_introduction_generator()
+
+
+# Pydantic models for job description interview
+class JobDescriptionData(BaseModel):
+    """Job description data for starting an interview."""
+    company_name: Optional[str] = Field(None, description="Name of the company")
+    company_description: Optional[str] = Field(None, description="Brief company description")
+    job_title: str = Field(..., description="Job title/position")
+    team_name: Optional[str] = Field(None, description="Team name if applicable")
+    location: Optional[str] = Field(None, description="Job location")
+    responsibilities: List[str] = Field(default=[], description="List of job responsibilities")
+    requirements: List[str] = Field(default=[], description="List of required qualifications")
+    nice_to_have: List[str] = Field(default=[], description="List of preferred qualifications")
+    role_description: Optional[str] = Field(None, description="Full job description text")
+
+
+class StartInterviewWithJDRequest(BaseModel):
+    """Request to start an interview with job description."""
+    role: str = Field(..., description="Role being interviewed for")
+    difficulty: str = Field(default="medium", description="Interview difficulty level")
+    job_description: JobDescriptionData = Field(..., description="Job description details")
+    candidate_name: Optional[str] = Field(None, description="Candidate name for personalization")
+    candidate_resume_summary: Optional[str] = Field(None, description="Resume summary for personalization")
+    generate_audio: bool = Field(default=True, description="Generate TTS audio for introduction")
+    introduction_mode: str = Field(default="concise", description="Introduction mode: 'concise' or 'detailed'")
+    question_count: int = Field(default=10, description="Total number of interview questions")
+
+
+class IntroSegmentOutput(BaseModel):
+    """Output for a single introduction segment."""
+    segment_type: str
+    text: str
+    order: int
+    duration_estimate_seconds: float
+    audio_url: Optional[str] = None
+
+
+class FirstQuestionData(BaseModel):
+    """First question data with audio."""
+    question_id: int = 1
+    text: str
+    intent: str = "introduction"
+    type: str = "standard"
+    audio_url: Optional[str] = None
+    duration_estimate_seconds: float = 8.0
+
+
+class JobDescriptionStoredOutput(BaseModel):
+    """Stored job description output."""
+    id: str
+    company_name: Optional[str] = None
+    job_title: str
+    created_at: str
+
+
+class StartInterviewWithJDResponse(BaseModel):
+    """Response from starting interview with job description."""
+    session_id: str
+    job_description_id: str
+    introduction_sequence: List[IntroSegmentOutput]
+    first_question: Optional[FirstQuestionData] = None
+    estimated_intro_duration_seconds: float
+    job_description_stored: JobDescriptionStoredOutput
+    error: Optional[str] = None
+
+
+def store_job_description_to_db(session_id: str, jd_data: JobDescriptionData) -> JobDescription:
+    """
+    Store job description data to database.
+
+    Args:
+        session_id: Interview session ID
+        jd_data: Job description data
+
+    Returns:
+        Created JobDescription record
+    """
+    with Session(engine) as db_session:
+        job_desc = JobDescription(
+            session_id=session_id,
+            company_name=jd_data.company_name,
+            company_description=jd_data.company_description,
+            job_title=jd_data.job_title,
+            team_name=jd_data.team_name,
+            location=jd_data.location,
+            responsibilities=json.dumps(jd_data.responsibilities) if jd_data.responsibilities else None,
+            requirements=json.dumps(jd_data.requirements) if jd_data.requirements else None,
+            nice_to_have=json.dumps(jd_data.nice_to_have) if jd_data.nice_to_have else None,
+            role_description=jd_data.role_description
+        )
+
+        db_session.add(job_desc)
+        db_session.commit()
+        db_session.refresh(job_desc)
+
+        return job_desc
+
+
+def create_interview_session_for_jd(
+    role: str,
+    difficulty: str,
+    question_count: int,
+    job_title: str
+) -> InterviewSession:
+    """
+    Create a new interview session for job description interview.
+
+    Args:
+        role: Role being interviewed for
+        difficulty: Interview difficulty
+        question_count: Number of questions
+        job_title: Job title from JD
+
+    Returns:
+        Created InterviewSession record
+    """
+    with Session(engine) as db_session:
+        session = InterviewSession(
+            role=role,
+            difficulty=difficulty,
+            question_count=question_count,
+            interviewer_names=["AI Interviewer"],
+            plan={"job_title": job_title, "type": "job_description_interview"}
+        )
+
+        db_session.add(session)
+        db_session.commit()
+        db_session.refresh(session)
+
+        return session
+
+
+@app.post("/api/interview/start-with-job-description", response_model=StartInterviewWithJDResponse)
+async def start_interview_with_job_description(
+    request: StartInterviewWithJDRequest,
+    orchestrator: InterviewOrchestrator = Depends(get_orchestrator),
+    job_intro_gen: JobIntroductionGenerator = Depends(get_job_intro_generator)
+):
+    """
+    Start an interview with a job description introduction.
+
+    This endpoint:
+    1. Creates an interview session
+    2. Stores the job description
+    3. Generates a warm introduction sequence with audio
+    4. Generates a personalized first question
+
+    The introduction sequence includes:
+    - Greeting (personalized if name provided)
+    - Role overview
+    - Responsibilities summary
+    - Requirements summary
+    - Transition to interview
+
+    Example request:
+    ```json
+    {
+        "role": "Software Engineer",
+        "difficulty": "medium",
+        "job_description": {
+            "company_name": "Google",
+            "job_title": "Senior Software Engineer",
+            "team_name": "Backend Infrastructure",
+            "responsibilities": ["Build scalable systems", "Design APIs"],
+            "requirements": ["5+ years Python", "System design skills"]
+        },
+        "candidate_name": "Alex",
+        "generate_audio": true
+    }
+    ```
+    """
+    logging.info(f"POST /api/interview/start-with-job-description - {request.job_description.job_title} at {request.job_description.company_name or 'Unknown Company'}")
+
+    try:
+        # 1. Create interview session
+        session = create_interview_session_for_jd(
+            role=request.role,
+            difficulty=request.difficulty,
+            question_count=request.question_count,
+            job_title=request.job_description.job_title
+        )
+        logging.info(f"Created interview session: {session.id}")
+
+        # 2. Store job description
+        job_desc = store_job_description_to_db(
+            session_id=session.id,
+            jd_data=request.job_description
+        )
+        logging.info(f"Stored job description: {job_desc.id}")
+
+        # 3. Convert JD to dict for generators
+        jd_dict = {
+            "company_name": request.job_description.company_name,
+            "company_description": request.job_description.company_description,
+            "job_title": request.job_description.job_title,
+            "team_name": request.job_description.team_name,
+            "location": request.job_description.location,
+            "responsibilities": request.job_description.responsibilities,
+            "requirements": request.job_description.requirements,
+            "nice_to_have": request.job_description.nice_to_have,
+            "role_description": request.job_description.role_description,
+        }
+
+        # 4. Generate introduction sequence
+        introduction_segments = await job_intro_gen.generate_opening_sequence(
+            job_description=jd_dict,
+            candidate_name=request.candidate_name,
+            candidate_resume_summary=request.candidate_resume_summary,
+            generate_audio=request.generate_audio
+        )
+        logging.info(f"Generated {len(introduction_segments)} introduction segments")
+
+        # 5. Generate personalized first question
+        first_question_text = await job_intro_gen.generate_personalized_first_question(
+            job_description=jd_dict,
+            candidate_resume_summary=request.candidate_resume_summary
+        )
+        logging.info(f"Generated first question: {first_question_text[:50]}...")
+
+        # 6. Generate audio for first question if requested
+        first_question_audio_url = None
+        if request.generate_audio:
+            try:
+                tts = get_tts_service()
+                import hashlib
+                text_hash = hashlib.md5(first_question_text.encode()).hexdigest()[:8]
+                cache_key = f"jd_first_question_{session.id[:8]}_{text_hash}"
+
+                audio_bytes, audio_path = await tts.generate_and_cache(
+                    text=first_question_text,
+                    cache_key=cache_key,
+                    voice="alloy",
+                    speed=0.9
+                )
+
+                if audio_path:
+                    filename = os.path.basename(audio_path)
+                    first_question_audio_url = f"/api/audio/{filename}"
+
+            except Exception as e:
+                logging.warning(f"Failed to generate audio for first question: {e}")
+
+        # 7. Build response
+        intro_output = [
+            IntroSegmentOutput(
+                segment_type=s.get("segment_type", ""),
+                text=s.get("text", ""),
+                order=s.get("order", 0),
+                duration_estimate_seconds=s.get("duration_estimate_seconds", 5),
+                audio_url=s.get("audio_url")
+            )
+            for s in introduction_segments
+        ]
+
+        estimated_duration = sum(s.get("duration_estimate_seconds", 5) for s in introduction_segments)
+
+        first_question_output = FirstQuestionData(
+            question_id=1,
+            text=first_question_text,
+            intent="introduction",
+            type="standard",
+            audio_url=first_question_audio_url,
+            duration_estimate_seconds=8.0
+        )
+
+        job_desc_output = JobDescriptionStoredOutput(
+            id=job_desc.id,
+            company_name=job_desc.company_name,
+            job_title=job_desc.job_title,
+            created_at=job_desc.created_at.isoformat()
+        )
+
+        return StartInterviewWithJDResponse(
+            session_id=session.id,
+            job_description_id=job_desc.id,
+            introduction_sequence=intro_output,
+            first_question=first_question_output,
+            estimated_intro_duration_seconds=estimated_duration,
+            job_description_stored=job_desc_output
+        )
+
+    except Exception as e:
+        logging.exception(f"Error starting interview with job description: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start interview: {str(e)}"
+        )
+
+
+# ==================== Job Description Parsing Endpoint ====================
+
+class ParseJDRequest(BaseModel):
+    """Request to parse a job description text."""
+    raw_text: str = Field(..., description="Raw job description text to parse")
+    source_type: str = Field(default="text", description="Source type: 'text', 'pdf', 'url'")
+
+
+class ParsedJobDescription(BaseModel):
+    """Parsed job description with extracted fields."""
+    company_name: Optional[str] = None
+    company_description: Optional[str] = None
+    job_title: Optional[str] = None
+    team_name: Optional[str] = None
+    location: Optional[str] = None
+    responsibilities: List[str] = []
+    requirements: List[str] = []
+    nice_to_have: List[str] = []
+    salary_range: Optional[str] = None
+    employment_type: Optional[str] = None
+    experience_level: Optional[str] = None
+    role_description: Optional[str] = None
+    confidence_score: float = 0.0
+
+
+class ParseJDResponse(BaseModel):
+    """Response from job description parsing."""
+    parsed: ParsedJobDescription
+    raw_text_length: int
+    parsing_method: str = "llm"
+    error: Optional[str] = None
+
+
+async def parse_job_description_with_llm(raw_text: str) -> Dict:
+    """
+    Parse job description text using LLM to extract structured data.
+
+    Args:
+        raw_text: Raw job description text
+
+    Returns:
+        Dict with parsed fields
+    """
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    prompt = f"""Parse this job description and extract structured information.
+
+JOB DESCRIPTION:
+{raw_text[:4000]}  # Limit to 4000 chars to stay within token limits
+
+Extract the following fields and return as JSON:
+{{
+    "company_name": "Company name if mentioned",
+    "company_description": "Brief company description if available",
+    "job_title": "The job title/position",
+    "team_name": "Team or department name if mentioned",
+    "location": "Job location (city, remote, hybrid, etc.)",
+    "responsibilities": ["List", "of", "key", "responsibilities"],
+    "requirements": ["List", "of", "required", "qualifications"],
+    "nice_to_have": ["List", "of", "preferred/bonus", "qualifications"],
+    "salary_range": "Salary range if mentioned",
+    "employment_type": "Full-time, Part-time, Contract, etc.",
+    "experience_level": "Entry, Mid, Senior, Lead, etc.",
+    "confidence_score": 0.0-1.0 based on how well you could extract info
+}}
+
+Rules:
+- Return ONLY valid JSON, no markdown or explanation
+- Use null for fields you can't find
+- Keep responsibilities and requirements concise (max 10 items each)
+- Combine similar items
+- Confidence score: 1.0 = all fields found clearly, 0.5 = partial, 0.0 = couldn't parse"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.3,
+            max_tokens=1500,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert at parsing job descriptions. Extract structured data accurately. Return only valid JSON."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        result_text = response.choices[0].message.content.strip()
+
+        # Handle potential markdown code blocks
+        if result_text.startswith("```"):
+            result_text = result_text.split("```")[1]
+            if result_text.startswith("json"):
+                result_text = result_text[4:]
+
+        parsed = json.loads(result_text)
+        return parsed
+
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse LLM response as JSON: {e}")
+        return {
+            "job_title": "Unknown Position",
+            "responsibilities": [],
+            "requirements": [],
+            "nice_to_have": [],
+            "confidence_score": 0.0
+        }
+    except Exception as e:
+        logging.exception(f"LLM parsing failed: {e}")
+        raise
+
+
+@app.post("/api/job-description/parse", response_model=ParseJDResponse)
+async def parse_job_description(request: ParseJDRequest):
+    """
+    Parse uploaded job description text and extract structured data.
+
+    This uses LLM to intelligently extract:
+    - Company information
+    - Job title and team
+    - Location
+    - Responsibilities
+    - Requirements (required vs nice-to-have)
+    - Salary and employment type
+
+    Example request:
+    ```json
+    {
+        "raw_text": "Senior Software Engineer at Google\\n\\nAbout the role...\\n\\nResponsibilities:\\n- Build scalable systems...",
+        "source_type": "text"
+    }
+    ```
+    """
+    logging.info(f"POST /api/job-description/parse - {len(request.raw_text)} chars")
+
+    if not request.raw_text or len(request.raw_text.strip()) < 50:
+        raise HTTPException(
+            status_code=400,
+            detail="Job description text is too short. Please provide at least 50 characters."
+        )
+
+    try:
+        # Parse using LLM
+        parsed_data = await parse_job_description_with_llm(request.raw_text)
+
+        # Build response
+        parsed = ParsedJobDescription(
+            company_name=parsed_data.get("company_name"),
+            company_description=parsed_data.get("company_description"),
+            job_title=parsed_data.get("job_title"),
+            team_name=parsed_data.get("team_name"),
+            location=parsed_data.get("location"),
+            responsibilities=parsed_data.get("responsibilities", []) or [],
+            requirements=parsed_data.get("requirements", []) or [],
+            nice_to_have=parsed_data.get("nice_to_have", []) or [],
+            salary_range=parsed_data.get("salary_range"),
+            employment_type=parsed_data.get("employment_type"),
+            experience_level=parsed_data.get("experience_level"),
+            role_description=request.raw_text[:2000],  # Store first 2000 chars
+            confidence_score=parsed_data.get("confidence_score", 0.5)
+        )
+
+        return ParseJDResponse(
+            parsed=parsed,
+            raw_text_length=len(request.raw_text),
+            parsing_method="llm"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error parsing job description: {str(e)}")
+        return ParseJDResponse(
+            parsed=ParsedJobDescription(
+                job_title="Unknown Position",
+                confidence_score=0.0
+            ),
+            raw_text_length=len(request.raw_text),
+            parsing_method="llm",
+            error=str(e)
+        )
+
+
+@app.post("/api/job-description/parse-file")
+async def parse_job_description_file(file: UploadFile = File(...)):
+    """
+    Parse an uploaded job description file (PDF or text).
+
+    Extracts text from the file and then parses it to extract
+    structured job description data.
+
+    Supported formats:
+    - PDF (.pdf)
+    - Text (.txt)
+    - Word (.docx)
+    """
+    logging.info(f"POST /api/job-description/parse-file - {file.filename}")
+
+    # Check file type
+    filename = file.filename.lower() if file.filename else ""
+
+    if not (filename.endswith('.pdf') or filename.endswith('.txt') or filename.endswith('.docx')):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Please upload a PDF, TXT, or DOCX file."
+        )
+
+    try:
+        # Read file content
+        content = await file.read()
+
+        # Extract text based on file type
+        raw_text = ""
+
+        if filename.endswith('.pdf'):
+            # Extract text from PDF
+            pdf_doc = fitz.open(stream=content, filetype="pdf")
+            for page in pdf_doc:
+                raw_text += page.get_text()
+            pdf_doc.close()
+
+        elif filename.endswith('.docx'):
+            # Extract text from DOCX
+            doc = docx.Document(io.BytesIO(content))
+            raw_text = "\n".join(para.text for para in doc.paragraphs)
+
+        else:  # .txt
+            raw_text = content.decode('utf-8', errors='ignore')
+
+        if len(raw_text.strip()) < 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract sufficient text from the file. Please check the file content."
+            )
+
+        # Parse the extracted text
+        parsed_data = await parse_job_description_with_llm(raw_text)
+
+        # Build response
+        parsed = ParsedJobDescription(
+            company_name=parsed_data.get("company_name"),
+            company_description=parsed_data.get("company_description"),
+            job_title=parsed_data.get("job_title"),
+            team_name=parsed_data.get("team_name"),
+            location=parsed_data.get("location"),
+            responsibilities=parsed_data.get("responsibilities", []) or [],
+            requirements=parsed_data.get("requirements", []) or [],
+            nice_to_have=parsed_data.get("nice_to_have", []) or [],
+            salary_range=parsed_data.get("salary_range"),
+            employment_type=parsed_data.get("employment_type"),
+            experience_level=parsed_data.get("experience_level"),
+            role_description=raw_text[:2000],
+            confidence_score=parsed_data.get("confidence_score", 0.5)
+        )
+
+        return ParseJDResponse(
+            parsed=parsed,
+            raw_text_length=len(raw_text),
+            parsing_method="llm"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error parsing job description file: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to parse file: {str(e)}"
+        )
+
+
+@app.get("/api/job-description/{session_id}")
+async def get_job_description(session_id: str):
+    """
+    Get the stored job description for a session.
+
+    Returns the full job description data associated with an interview session.
+    """
+    logging.info(f"GET /api/job-description/{session_id}")
+
+    try:
+        validate_uuid(session_id, "session_id")
+
+        with Session(engine) as db_session:
+            job_desc = db_session.exec(
+                select(JobDescription).where(JobDescription.session_id == session_id)
+            ).first()
+
+            if not job_desc:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No job description found for session {session_id}"
+                )
+
+            return {
+                "id": job_desc.id,
+                "session_id": job_desc.session_id,
+                "company_name": job_desc.company_name,
+                "company_description": job_desc.company_description,
+                "job_title": job_desc.job_title,
+                "team_name": job_desc.team_name,
+                "location": job_desc.location,
+                "responsibilities": json.loads(job_desc.responsibilities) if job_desc.responsibilities else [],
+                "requirements": json.loads(job_desc.requirements) if job_desc.requirements else [],
+                "nice_to_have": json.loads(job_desc.nice_to_have) if job_desc.nice_to_have else [],
+                "role_description": job_desc.role_description,
+                "created_at": job_desc.created_at.isoformat()
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Error getting job description: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

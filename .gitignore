@@ -51,3 +51,7 @@ htmlcov/
 # Windows artifacts
 nul
 Thumbs.db
+
+# Audio cache (TTS generated files)
+backend/audio_cache/
+*.mp3

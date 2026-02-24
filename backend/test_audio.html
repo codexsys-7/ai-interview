@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTS Audio Test - AI Interview Simulator</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        body {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #4f46e5;
+            padding-bottom: 10px;
+        }
+        .section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #4f46e5;
+        }
+        button {
+            background: #4f46e5;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background: #4338ca;
+        }
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .status.info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        .status.warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        pre {
+            background: #1f2937;
+            color: #e5e7eb;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .audio-player {
+            margin: 15px 0;
+            padding: 15px;
+            background: #f3f4f6;
+            border-radius: 6px;
+        }
+        .audio-player h4 {
+            margin: 0 0 10px 0;
+            color: #374151;
+        }
+        .audio-player audio {
+            width: 100%;
+        }
+        .audio-status {
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        textarea {
+            min-height: 100px;
+            font-family: monospace;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #374151;
+        }
+        .flex {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .flex > div {
+            flex: 1;
+            min-width: 200px;
+        }
+        #audioContainer {
+            display: none;
+        }
+        #audioContainer.show {
+            display: block;
+        }
+        .loader {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4f46e5;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <h1>TTS Audio Test</h1>
+    <p>Test the real-time conversational endpoints with TTS audio generation.</p>
+
+    <!-- Test 1: Simple TTS Generation -->
+    <div class="section">
+        <h2>Test 1: Simple TTS Generation</h2>
+        <p>Generate audio for a simple text using the TTS endpoint.</p>
+
+        <label for="simpleText">Text to convert:</label>
+        <input type="text" id="simpleText" value="Hello, welcome to your interview. Tell me about yourself.">
+
+        <button onclick="testSimpleTTS()">Generate Audio</button>
+
+        <div id="simpleTTSStatus"></div>
+        <div id="simpleTTSAudio" class="audio-player" style="display:none;">
+            <h4>Generated Audio:</h4>
+            <audio id="simpleAudioPlayer" controls></audio>
+            <div class="audio-status" id="simpleAudioStatus"></div>
+        </div>
+    </div>
+
+    <!-- Test 2: Submit Answer Realtime -->
+    <div class="section">
+        <h2>Test 2: Submit Answer with Realtime Response</h2>
+        <p>Submit an answer and get AI response with audio.</p>
+
+        <div class="flex">
+            <div>
+                <label for="role">Role:</label>
+                <input type="text" id="role" value="Software Engineer">
+            </div>
+            <div>
+                <label for="difficulty">Difficulty:</label>
+                <input type="text" id="difficulty" value="medium">
+            </div>
+        </div>
+
+        <label for="questionText">Question:</label>
+        <input type="text" id="questionText" value="Tell me about yourself and your background.">
+
+        <label for="userAnswer">Your Answer:</label>
+        <textarea id="userAnswer">I am a passionate software engineer with 5 years of experience. I specialize in Python and React, and I've led several successful projects including a microservices migration that improved system performance by 40%. I enjoy solving complex problems and mentoring junior developers.</textarea>
+
+        <label>
+            <input type="checkbox" id="generateAudio" checked> Generate Audio
+        </label>
+
+        <button onclick="testSubmitAnswer()" id="submitBtn">Submit Answer</button>
+
+        <div id="submitStatus"></div>
+
+        <div id="audioContainer">
+            <h3>Audio Responses:</h3>
+
+            <div id="ackAudio" class="audio-player" style="display:none;">
+                <h4>Acknowledgment:</h4>
+                <p id="ackText"></p>
+                <audio id="ackAudioPlayer" controls></audio>
+                <div class="audio-status" id="ackAudioStatus"></div>
+            </div>
+
+            <div id="transitionAudio" class="audio-player" style="display:none;">
+                <h4>Transition:</h4>
+                <p id="transitionText"></p>
+                <audio id="transitionAudioPlayer" controls></audio>
+                <div class="audio-status" id="transitionAudioStatus"></div>
+            </div>
+
+            <div id="questionAudio" class="audio-player" style="display:none;">
+                <h4>Next Question:</h4>
+                <p id="nextQuestionText"></p>
+                <audio id="questionAudioPlayer" controls></audio>
+                <div class="audio-status" id="questionAudioStatus"></div>
+            </div>
+
+            <div id="probeAudio" class="audio-player" style="display:none;">
+                <h4>Follow-up Probe:</h4>
+                <p id="probeText"></p>
+                <audio id="probeAudioPlayer" controls></audio>
+                <div class="audio-status" id="probeAudioStatus"></div>
+            </div>
+        </div>
+
+        <h3>Raw Response:</h3>
+        <pre id="responseJson">Response will appear here...</pre>
+    </div>
+
+    <!-- Test 3: Check Existing Audio Files -->
+    <div class="section">
+        <h2>Test 3: Check Existing Audio Files</h2>
+        <p>Test if existing audio files can be served.</p>
+
+        <label for="audioFilename">Audio Filename:</label>
+        <input type="text" id="audioFilename" placeholder="e.g., acknowledgment_4d0dc85a_4d276742.mp3">
+
+        <button onclick="testExistingAudio()">Load Audio</button>
+
+        <div id="existingAudioStatus"></div>
+        <div id="existingAudioPlayer" class="audio-player" style="display:none;">
+            <h4>Audio File:</h4>
+            <audio id="existingAudio" controls></audio>
+            <div class="audio-status" id="existingAudioLoadStatus"></div>
+        </div>
+    </div>
+
+    <!-- Test 4: Audio Cache Status -->
+    <div class="section">
+        <h2>Test 4: Audio Cache Status</h2>
+        <p>Check the audio cache statistics.</p>
+
+        <button onclick="checkCacheStatus()">Check Cache Status</button>
+
+        <div id="cacheStatus"></div>
+        <pre id="cacheJson">Cache info will appear here...</pre>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        function showStatus(elementId, message, type) {
+            const el = document.getElementById(elementId);
+            el.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        function setupAudioPlayer(audioElement, statusElement) {
+            audioElement.onloadstart = () => {
+                statusElement.textContent = 'Loading audio...';
+                statusElement.style.color = '#6b7280';
+            };
+            audioElement.oncanplay = () => {
+                statusElement.textContent = 'Audio loaded successfully!';
+                statusElement.style.color = '#059669';
+            };
+            audioElement.onerror = (e) => {
+                statusElement.textContent = `Error loading audio: ${audioElement.error?.message || 'Unknown error'}`;
+                statusElement.style.color = '#dc2626';
+            };
+        }
+
+        async function testSimpleTTS() {
+            const text = document.getElementById('simpleText').value;
+            showStatus('simpleTTSStatus', '<span class="loader"></span> Generating audio...', 'info');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/tts/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text: text,
+                        context: 'question',
+                        return_url: true
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success && data.audio_url) {
+                    showStatus('simpleTTSStatus', `Audio generated! Voice: ${data.voice_used}, Cached: ${data.cached}`, 'success');
+
+                    const audioPlayer = document.getElementById('simpleAudioPlayer');
+                    const audioStatus = document.getElementById('simpleAudioStatus');
+                    setupAudioPlayer(audioPlayer, audioStatus);
+
+                    audioPlayer.src = `${API_BASE}${data.audio_url}`;
+                    document.getElementById('simpleTTSAudio').style.display = 'block';
+                } else {
+                    showStatus('simpleTTSStatus', `Error: ${data.error || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                showStatus('simpleTTSStatus', `Request failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testSubmitAnswer() {
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loader"></span> Processing...';
+
+            const sessionId = generateUUID();
+            const role = document.getElementById('role').value;
+            const difficulty = document.getElementById('difficulty').value;
+            const questionText = document.getElementById('questionText').value;
+            const userAnswer = document.getElementById('userAnswer').value;
+            const generateAudio = document.getElementById('generateAudio').checked;
+
+            showStatus('submitStatus', '<span class="loader"></span> Submitting answer and generating response...', 'info');
+
+            // Hide all audio players
+            document.getElementById('audioContainer').classList.remove('show');
+            ['ackAudio', 'transitionAudio', 'questionAudio', 'probeAudio'].forEach(id => {
+                document.getElementById(id).style.display = 'none';
+            });
+
+            try {
+                const response = await fetch(`${API_BASE}/api/interview/submit-answer-realtime`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        question_id: 1,
+                        question_text: questionText,
+                        question_intent: 'introduction',
+                        role: role,
+                        user_answer: userAnswer,
+                        transcript_raw: userAnswer,
+                        audio_duration_seconds: 30.0,
+                        difficulty: difficulty,
+                        total_questions: 10,
+                        generate_audio: generateAudio
+                    })
+                });
+
+                const data = await response.json();
+
+                // Display raw response
+                document.getElementById('responseJson').textContent = JSON.stringify(data, null, 2);
+
+                if (data.error) {
+                    showStatus('submitStatus', `Error: ${data.error}`, 'error');
+                } else {
+                    const flowInfo = data.flow_control || {};
+                    showStatus('submitStatus',
+                        `Success! Stage: ${flowInfo.conversation_stage}, Proceed: ${flowInfo.should_proceed_to_next}, Quality OK: ${flowInfo.quality_sufficient}`,
+                        'success'
+                    );
+
+                    document.getElementById('audioContainer').classList.add('show');
+
+                    // Acknowledgment audio
+                    if (data.ai_response?.acknowledgment) {
+                        const ack = data.ai_response.acknowledgment;
+                        document.getElementById('ackText').textContent = ack.text;
+
+                        if (ack.audio_url) {
+                            const player = document.getElementById('ackAudioPlayer');
+                            const status = document.getElementById('ackAudioStatus');
+                            setupAudioPlayer(player, status);
+                            player.src = `${API_BASE}${ack.audio_url}`;
+                            document.getElementById('ackAudio').style.display = 'block';
+                        } else {
+                            document.getElementById('ackAudio').style.display = 'block';
+                            document.getElementById('ackAudioStatus').textContent = 'No audio URL (audio generation may be disabled)';
+                        }
+                    }
+
+                    // Transition audio
+                    if (data.ai_response?.transition) {
+                        const trans = data.ai_response.transition;
+                        document.getElementById('transitionText').textContent = trans.text;
+
+                        if (trans.audio_url) {
+                            const player = document.getElementById('transitionAudioPlayer');
+                            const status = document.getElementById('transitionAudioStatus');
+                            setupAudioPlayer(player, status);
+                            player.src = `${API_BASE}${trans.audio_url}`;
+                            document.getElementById('transitionAudio').style.display = 'block';
+                        }
+                    }
+
+                    // Follow-up probe
+                    if (data.ai_response?.follow_up_probe) {
+                        const probe = data.ai_response.follow_up_probe;
+                        document.getElementById('probeText').textContent = probe.text;
+
+                        if (probe.audio_url) {
+                            const player = document.getElementById('probeAudioPlayer');
+                            const status = document.getElementById('probeAudioStatus');
+                            setupAudioPlayer(player, status);
+                            player.src = `${API_BASE}${probe.audio_url}`;
+                            document.getElementById('probeAudio').style.display = 'block';
+                        }
+                    }
+
+                    // Next question audio
+                    if (data.next_question?.question) {
+                        const q = data.next_question.question;
+                        document.getElementById('nextQuestionText').textContent = q.text;
+
+                        if (q.audio_url) {
+                            const player = document.getElementById('questionAudioPlayer');
+                            const status = document.getElementById('questionAudioStatus');
+                            setupAudioPlayer(player, status);
+                            player.src = `${API_BASE}${q.audio_url}`;
+                            document.getElementById('questionAudio').style.display = 'block';
+                        } else {
+                            document.getElementById('questionAudio').style.display = 'block';
+                            document.getElementById('questionAudioStatus').textContent = 'No audio URL';
+                        }
+                    }
+                }
+            } catch (error) {
+                showStatus('submitStatus', `Request failed: ${error.message}`, 'error');
+                document.getElementById('responseJson').textContent = `Error: ${error.message}`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Submit Answer';
+            }
+        }
+
+        function testExistingAudio() {
+            const filename = document.getElementById('audioFilename').value.trim();
+            if (!filename) {
+                showStatus('existingAudioStatus', 'Please enter a filename', 'warning');
+                return;
+            }
+
+            showStatus('existingAudioStatus', 'Loading audio...', 'info');
+
+            const player = document.getElementById('existingAudio');
+            const status = document.getElementById('existingAudioLoadStatus');
+            setupAudioPlayer(player, status);
+
+            player.src = `${API_BASE}/api/audio/${filename}`;
+            document.getElementById('existingAudioPlayer').style.display = 'block';
+        }
+
+        async function checkCacheStatus() {
+            showStatus('cacheStatus', 'Checking cache...', 'info');
+
+            try {
+                const sessionId = generateUUID();
+                const response = await fetch(`${API_BASE}/api/interview/audio-status/${sessionId}`);
+                const data = await response.json();
+
+                if (data.cache_stats) {
+                    showStatus('cacheStatus',
+                        `Cache: ${data.cache_stats.total_files} files, ${data.cache_stats.total_size_mb} MB`,
+                        'success'
+                    );
+                }
+
+                document.getElementById('cacheJson').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                showStatus('cacheStatus', `Error: ${error.message}`, 'error');
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('TTS Audio Test Page Loaded');
+            console.log('API Base:', API_BASE);
+        });
+    </script>
+</body>
+</html>

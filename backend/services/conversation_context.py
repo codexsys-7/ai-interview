@@ -25,6 +25,38 @@ from db import engine, InterviewAnswer
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 
+def get_all_answers(session_id: str) -> List[Dict]:
+    """
+    Get all answers for a session as a list of dictionaries.
+
+    Args:
+        session_id: UUID of the interview session
+
+    Returns:
+        List of answer dictionaries with all fields
+    """
+    with Session(engine) as db_session:
+        answers = db_session.exec(
+            select(InterviewAnswer)
+            .where(InterviewAnswer.session_id == session_id)
+            .order_by(InterviewAnswer.answer_timestamp)
+        ).all()
+
+        return [
+            {
+                "answer_id": str(answer.answer_id) if answer.answer_id else None,
+                "session_id": answer.session_id,
+                "question_id": answer.question_id,
+                "question_text": answer.question_text,
+                "question_intent": answer.question_intent,
+                "user_answer": answer.user_answer,
+                "role": answer.role,
+                "answer_timestamp": answer.answer_timestamp.isoformat() if answer.answer_timestamp else None
+            }
+            for answer in answers
+        ]
+
+
 def build_conversation_summary(session_id: str) -> str:
     """
     Build a comprehensive summary of all past answers in an interview session.
