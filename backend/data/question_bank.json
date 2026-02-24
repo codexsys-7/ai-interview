@@ -1,0 +1,289 @@
+{
+  "software_engineer": {
+    "easy": {
+      "introduction": [
+        "Can you introduce yourself briefly?",
+        "How would you define yourself today? Are you a senior software engineer focused on AI? Based on your past experience, how do you see yourself right now?",
+        "What's your first name, by the way?",
+        "Where did you go to school?",
+        "Did you get a degree in computer science?",
+        "What was your master's degree in?",
+        "Have you completed your master's?",
+        "Was your master's degree worth it?"
+      ],
+      "background": [
+        "Have you worked with AWS before?",
+        "How much hands-on Java experience do you have?",
+        "Have you built production systems in Java?",
+        "When was that, and with which company?",
+        "Have you used Spring backend frameworks like Spring or Spring Boot?",
+        "Are you a US citizen or permanent resident?",
+        "Where are you located? Which city?",
+        "Would you consider relocation?"
+      ],
+      "motivation": [
+        "Why this role, and why now?",
+        "Where are you currently, and what has you looking for your next opportunity? What's motivating you right now?",
+        "What are the most important things you're looking for in your next role?",
+        "Where do you want to be career-wise in three years from now?",
+        "Looking further ahead, where would you like to be in seven years?",
+        "How soon could you start if you were given an offer?",
+        "Do you have any concerns about the role or the company?",
+        "What would my daily workflow be like in the organization over the first month or year?"
+      ],
+      "career_goals": [
+        "For the next two to three years, would you rather build core backend systems and platforms, or build AI/ML models and pipelines?",
+        "You transitioned from data engineering into data science and then progressed to systems. What drove that transition? What excites you about this space?",
+        "What is your base salary range? What are you targeting for this position?"
+      ]
+    },
+    "medium": {
+      "technical_skills": [
+        "Can you explain which AWS services you have used in your day-to-day activities or throughout your experience?",
+        "What kind of integrations did you work on within the AWS platform?",
+        "Have you ever worked with ECS containers?",
+        "Have you worked on APIs? Have you created APIs?",
+        "For APIs, which authentication mechanism have you used? Can you explain that authentication process end to end?",
+        "Have you worked on any batch processing?",
+        "Have you worked with Step Functions?",
+        "Have you worked with MSK (Amazon Managed Streaming for Apache Kafka)?",
+        "What kind of activities have you done with MSK?",
+        "Can you explain the deployment strategy you used in ECS?",
+        "What is the firewall at the subnet level - Security Group or NACL?",
+        "When you join us, you'll be asked questions about CDK deployment. What language did you use for CDK deployment?",
+        "Can you tell me the difference between static methods, class methods, and instance methods?",
+        "What is the role of the __init__.py file in Python directories?",
+        "Have you worked with multiprocessing and multithreading in Python?",
+        "Have you created a Python library to be shared between your teams?",
+        "With Fast API, have you implemented any type of authorization or authentication?",
+        "What type of service did you use for authentication?",
+        "Have you ever used AWS Cognito?",
+        "What's your experience with relational databases from an application layer perspective? Have you worked with ORMs like Hibernate or similar tools?",
+        "How do you scale horizontally and vertically?"
+      ],
+      "problem_solving": [
+        "Let's say I give you a list in Python containing city names, and I ask you to remove the duplicates. How would you do it?",
+        "What function would you use?",
+        "If I want to see how many times each city appears (duplicates, triplicates, quadruplicates), does Python offer something out of the box for this?",
+        "In multiple inheritance, if both parent classes have a method called 'run,' which one will execute?",
+        "Have you faced scenarios where a service was not running or timed out? What could have caused timeouts when deploying your Fast API on ECS?",
+        "If I want to schedule a job to run every 55 minutes, how would you do that?",
+        "Let's take an example: you have a Lambda function calling a third-party endpoint. If you face intermittent connectivity issues, what solutions would you suggest?",
+        "Regarding Lambda cold starts, what are the steps to improve performance and avoid cold starts?"
+      ],
+      "behavioral": [
+        "Walk me through a backend service you've designed. I'm looking to hear about data models, APIs, error handling, and performance considerations.",
+        "Can you pick one thing you personally shipped end-to-end in the last twelve months that maps closely to this position? Tell me about the problem, solution, and any measurable impact.",
+        "What do you personally own versus what the team owns?",
+        "What would your response be if I asked you what separates you from other candidates?",
+        "Can you walk me through how you use AI in your day-to-day job, particularly in your engineering setup? What tools and patterns do you use, and what do you delegate to AI?",
+        "Copilot's been around for a couple of years. Have you used any other tools like Cursor or Claude Code?",
+        "What would you use an LLM for, and what would you never paste into an LLM? What safeguards would you use?",
+        "Tell me about a time in your agentic experience where you had to make trade-off decisions for a solution where it wasn't the perfect solution, but you had to consider other factors. How do you make trade-offs like that?",
+        "What systems do you feel strongest owning end to end?"
+      ],
+      "scenario_based": [
+        "Can you give me two examples: when would you use a Lambda function versus when would you choose an ECS containerized service?",
+        "Let's say you have a Fargate task doing batch processing of 100 documents, with each taking 20 minutes. I have two requirements: (1) if one document fails, continue processing the other 90, and (2) complete the processing as fast as possible, knowing the documents are independent. How would you design this?",
+        "After months of development, you have Fast API, Lambdas, and ECS tasks running. At a high level, I'd like to know what's happening in my system - not just logs, but a status report showing the complete workflow. How would you approach this requirement? What tools would you use?",
+        "Where would you store those observability records? Where are those records kept?",
+        "If you had to be productive in Java Spring within 60 to 90 days, how would you approach that?",
+        "You mentioned Fast API. Imagine this scenario: we deployed Fast API with CDK, it took some time, and then GitHub Actions timed out. What could have happened?"
+      ],
+      "work_experience": [
+        "You've been at your current company for less than a year. What's going on there that has you looking to move so quickly?",
+        "You mentioned using an LLM for reasoning - how exactly does it work? What exactly is its role?",
+        "How do you deploy with rollback safety?",
+        "How do you handle multi-tenancy propagation and trace IDs end to end?"
+      ]
+    },
+    "hard": {
+      "system_design": [
+        "Here's a real-time scenario: your Lambda function retrieves secrets from AWS Secrets Manager every time it's triggered. This is adding latency (milliseconds to seconds) and impacting your overall microservice response time. What is the cause of this issue, and how would you solve it?",
+        "I have a domain and have reached the maximum limit in ALB rules. Now I want to deploy 50 more applications using the same domain. What would be the solution?",
+        "For a system where speed isn't the priority but accuracy absolutely is, how would you design a system that orients toward accuracy, understanding that LLMs may not always give consistent results? How would you build that resilience, particularly around document processing?",
+        "Consider a system we're designing for finance - specifically an automated underwriting workflow where we analyze bank statements. One particular challenge is processing and extracting information accurately. How would you design this?",
+        "At a high level, I'd like to know what's happening in my system - not just logs, but a complete status report showing the workflow. How would you approach this?"
+      ],
+      "architecture": [
+        "Can you tell me about your multi-agent system and walk me through its architecture?",
+        "How did you decide on agent boundaries and what each agent would focus on?",
+        "How did your agents communicate with each other?",
+        "What's the reasoning behind your choice of using LangChain versus LangGraph?",
+        "If I asked you for a one-sentence, super crisp answer: what is the right agent architecture for a given scenario, and what metrics would you use to validate that?",
+        "What would be your go-to approach when designing something like this - would you use agents or workflows?"
+      ],
+      "complex_scenarios": [
+        "In financial agentic flows, auditability is critical. How would you handle the requirement that everything has to be explained - you can't just say 'this is a decision' but must substantiate it?",
+        "What has been your experience with typical bottlenecks in document processing at scale? What's been your experience with scaling such systems?",
+        "What are your thoughts on how deterministic these systems are, and should they be deterministic?",
+        "How do you ensure consistency when using agents, especially when dealing with stochastic outputs?",
+        "That solution requires checking both load balancers, which will impact performance, correct?"
+      ],
+      "leadership": [
+        "What do you personally own versus what the team owns?",
+        "Can you share a situation where you hired a candidate who went on to do exceptionally well? What specific traits did they have, so I can assess myself for this organization?",
+        "Can you go one level more specific? It sounds like a successful project. Walk me through what happens end to end.",
+        "How does the flow work when an API call comes in?"
+      ]
+    }
+  },
+  "data_scientist": {
+    "easy": {
+      "introduction": [
+        "Can you introduce yourself and your background in data science?",
+        "What drew you to data science as a career?",
+        "Tell me about your educational background."
+      ],
+      "motivation": [
+        "Why are you interested in this data science role?",
+        "What type of problems do you enjoy solving most?",
+        "Where do you see data science heading in the next few years?"
+      ]
+    },
+    "medium": {
+      "technical_skills": [
+        "What machine learning frameworks have you worked with?",
+        "How do you approach feature engineering?",
+        "Explain your experience with model evaluation and validation.",
+        "Have you worked with deep learning? What frameworks?",
+        "How do you handle imbalanced datasets?"
+      ],
+      "problem_solving": [
+        "Walk me through how you would approach a classification problem from start to finish.",
+        "How do you decide which algorithm to use for a given problem?",
+        "Tell me about a time you had to deal with messy, incomplete data."
+      ],
+      "behavioral": [
+        "Tell me about a model you built that had significant business impact.",
+        "How do you communicate complex technical concepts to non-technical stakeholders?",
+        "Describe a time when your model didn't perform as expected. What did you do?"
+      ]
+    },
+    "hard": {
+      "system_design": [
+        "How would you design an end-to-end ML pipeline for production?",
+        "Describe your approach to A/B testing for ML models.",
+        "How do you handle model monitoring and drift detection in production?"
+      ],
+      "architecture": [
+        "How would you architect a real-time recommendation system?",
+        "Describe your experience with MLOps and model deployment.",
+        "How do you balance model accuracy with inference latency?"
+      ]
+    }
+  },
+  "follow_up_templates": [
+    "Can you walk me through the specific steps you took?",
+    "Can you go one level more specific?",
+    "What do you personally own versus what the team owns?",
+    "How does the flow work when an API call comes in?",
+    "Can you elaborate a bit more on that?",
+    "How do you handle multi-tenancy propagation and trace IDs end to end?",
+    "If you want it back as a list after converting to a set, you'd do list(set(cities)), correct?",
+    "For example, if I have 'Alexandria' appearing five times, is there something in Python that will show me how many of each?",
+    "What language did you use with CDK?",
+    "Earlier you mentioned building internal agents that automate data validation. Can you explain more about your personal workflow?",
+    "Can you tell me more about YOUR specific contribution versus the team's?",
+    "What were the measurable results of that project?",
+    "What challenges did you face during implementation?",
+    "How did you handle the edge cases?",
+    "What would you do differently if you had to do it again?"
+  ],
+  "reference_templates": [
+    "You mentioned {topic}. Have you ever worked with {related_topic}?",
+    "Earlier you mentioned {topic}. Let me rephrase - can you explain more about {aspect}?",
+    "Let's take an example based on what you said about {topic}...",
+    "You mentioned Fast API. Imagine this scenario: we deployed Fast API with CDK, it took some time, and then GitHub Actions timed out. What could have happened?",
+    "You mentioned you've worked on Lambda. Have you ever worked with ECS containers?",
+    "Going back to what you said about {topic}, how would you handle {scenario}?",
+    "You brought up {topic} earlier. Can you walk me through a specific example?"
+  ],
+  "deep_dive_templates": [
+    "Here's a real-time scenario based on {topic}: your Lambda function retrieves secrets from AWS Secrets Manager every time it's triggered. What is the cause of this latency, and how would you solve it?",
+    "What's the reasoning behind your choice of {technology_a} versus {technology_b}?",
+    "What are your thoughts on how deterministic these systems should be?",
+    "If I asked you for a one-sentence, super crisp answer: what is the right approach for {scenario}, and what metrics would you use to validate that?",
+    "In Python, you can have multiple inheritance. If class X inherits from both A and B, and both have a method called 'run,' which run method will execute when you call x.run()?",
+    "What has been your experience with typical bottlenecks in {area} at scale?",
+    "How do you ensure consistency when dealing with {technology}, especially with stochastic outputs?",
+    "You've mentioned {topic} several times. What's the most complex problem you've solved with it?",
+    "I can tell {topic} is important to you. Tell me about your proudest achievement involving it."
+  ],
+  "contradiction_templates": [
+    "I notice you mentioned {statement_a} earlier, but now you're saying {statement_b}. Can you help me understand?",
+    "Earlier you said {statement_a}. I want to make sure I understand correctly - how does that relate to {statement_b}?",
+    "Help me reconcile what you said in the earlier question about {topic_a} with what you just mentioned about {topic_b}.",
+    "I was just curious - you mentioned {statement_a}, but {statement_b} seems different. Can you clarify?"
+  ],
+  "interviewer_comments": {
+    "acknowledgment": [
+      "That is good.",
+      "That's great.",
+      "Perfect.",
+      "Correct. Perfect answer.",
+      "That's good.",
+      "Correct. Yeah.",
+      "Perfect answer. Thank you.",
+      "Correct.",
+      "Great, thank you."
+    ],
+    "transition": [
+      "Okay, cool.",
+      "Cool. Alrighty.",
+      "Great, okay.",
+      "Let's move on.",
+      "Perfect, thank you.",
+      "Okay.",
+      "Cool.",
+      "Alright, let's shift gears.",
+      "Now I'd like to explore something different."
+    ],
+    "encouragement": [
+      "I'd love to hear more about that.",
+      "Can you elaborate a bit?",
+      "Tell me more about the specifics.",
+      "That's interesting - go on.",
+      "I'm curious to learn more."
+    ],
+    "closing": [
+      "I think I'm good from my side.",
+      "We're out of time. Do you have any questions for us?",
+      "Thank you for taking your time today.",
+      "It was good to meet you.",
+      "Do you have any questions for me?",
+      "This has been very helpful. Thank you.",
+      "I appreciate you taking the time today.",
+      "Thank you. It was great to meet you."
+    ],
+    "rapport_building": [
+      "Nice to meet you.",
+      "Thanks for taking the time today.",
+      "No need to be nervous.",
+      "We'll try to keep it conversational.",
+      "Feel free to ask questions as we go."
+    ]
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "source": "Real interview transcripts - February 2026",
+    "total_questions": 156,
+    "categories": {
+      "standard": 87,
+      "follow_up": 9,
+      "reference": 5,
+      "contradiction": 1,
+      "deep_dive": 8,
+      "contextual": 18,
+      "interviewer_comments": 28
+    },
+    "interviews": [
+      "Python AWS Developer Technical - Infosys",
+      "Python AWS Engineer Technical - Next Era",
+      "Silk River - Simon (Recruiter)",
+      "Silk River - John (CEO/Founder)",
+      "Silk River - Peter (Chief Data Science Officer)",
+      "Silk River - Claude (CTO)"
+    ]
+  }
+}
