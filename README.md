@@ -211,7 +211,7 @@ Evaluates **job match + readiness**:
 **Backend**
 - cd backend
 - python -m venv venv
-- source venv/bin/activate
+- .\\venv\\Scripts\\activate.bat
 - pip install -r requirements.txt
 - uvicorn api:app --reload
 
