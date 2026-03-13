@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
 /* Phase 1.3: Animations for intelligent interview flow */
 
 /* Fade in animation */
@@ -437,12 +446,9 @@
   }
 }
 
-/* optional defaults */
+/* Base reset — colors and fonts come from globals.css theme variables */
 html, body, #root {
   height: 100%;
-  background-color: #f9fafb; /* light gray bg */
-  color: #111827; /* text-gray-900 */
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
   margin: 0;
 }
 /* 

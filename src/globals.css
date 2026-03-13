@@ -1,0 +1,188 @@
+/* Futuristic Dark Theme with Cyan Accent for AI Interview App */
+:root {
+  /* Deep dark backgrounds — stored as raw oklch channel values (L C H) */
+  --background: 0.08 0.01 260;
+  --foreground: 0.95 0 0;
+
+  /* Card with subtle transparency */
+  --card: 0.12 0.01 260;
+  --card-foreground: 0.95 0 0;
+
+  /* Popover */
+  --popover: 0.1 0.01 260;
+  --popover-foreground: 0.95 0 0;
+
+  /* Primary - Cyan/Teal accent */
+  --primary: 0.75 0.15 195;
+  --primary-foreground: 0.1 0.01 260;
+
+  /* Secondary - Muted cyan */
+  --secondary: 0.2 0.02 260;
+  --secondary-foreground: 0.9 0 0;
+
+  /* Muted */
+  --muted: 0.18 0.01 260;
+  --muted-foreground: 0.6 0 0;
+
+  /* Accent - Brighter cyan for highlights */
+  --accent: 0.7 0.12 195;
+  --accent-foreground: 0.1 0.01 260;
+
+  /* Destructive */
+  --destructive: 0.55 0.2 25;
+  --destructive-foreground: 0.95 0 0;
+
+  /* Borders and inputs */
+  --border: 0.25 0.02 260;
+  --input: 0.15 0.01 260;
+  --ring: 0.75 0.15 195;
+
+  /* Charts - Cyan/Teal spectrum */
+  --chart-1: 0.75 0.15 195;
+  --chart-2: 0.65 0.12 180;
+  --chart-3: 0.55 0.1 210;
+  --chart-4: 0.7 0.14 165;
+  --chart-5: 0.6 0.08 225;
+
+  --radius: 0.75rem;
+
+  /* Sidebar */
+  --sidebar: 0.1 0.01 260;
+  --sidebar-foreground: 0.95 0 0;
+  --sidebar-primary: 0.75 0.15 195;
+  --sidebar-primary-foreground: 0.1 0.01 260;
+  --sidebar-accent: 0.18 0.01 260;
+  --sidebar-accent-foreground: 0.9 0 0;
+  --sidebar-border: 0.25 0.02 260;
+  --sidebar-ring: 0.75 0.15 195;
+
+  /* Custom properties for glowing effects (full oklch values — used directly in CSS) */
+  --glow-primary: oklch(0.75 0.15 195 / 0.5);
+  --glow-intense: oklch(0.8 0.18 195 / 0.8);
+  --glass-bg: oklch(0.15 0.01 260 / 0.6);
+  --glass-border: oklch(0.3 0.02 260 / 0.3);
+}
+
+.dark {
+  --background: 0.08 0.01 260;
+  --foreground: 0.95 0 0;
+  --card: 0.12 0.01 260;
+  --card-foreground: 0.95 0 0;
+  --popover: 0.1 0.01 260;
+  --popover-foreground: 0.95 0 0;
+  --primary: 0.75 0.15 195;
+  --primary-foreground: 0.1 0.01 260;
+  --secondary: 0.2 0.02 260;
+  --secondary-foreground: 0.9 0 0;
+  --muted: 0.18 0.01 260;
+  --muted-foreground: 0.6 0 0;
+  --accent: 0.7 0.12 195;
+  --accent-foreground: 0.1 0.01 260;
+  --destructive: 0.55 0.2 25;
+  --destructive-foreground: 0.95 0 0;
+  --border: 0.25 0.02 260;
+  --input: 0.15 0.01 260;
+  --ring: 0.75 0.15 195;
+  --chart-1: 0.75 0.15 195;
+  --chart-2: 0.65 0.12 180;
+  --chart-3: 0.55 0.1 210;
+  --chart-4: 0.7 0.14 165;
+  --chart-5: 0.6 0.08 225;
+  --sidebar: 0.1 0.01 260;
+  --sidebar-foreground: 0.95 0 0;
+  --sidebar-primary: 0.75 0.15 195;
+  --sidebar-primary-foreground: 0.1 0.01 260;
+  --sidebar-accent: 0.18 0.01 260;
+  --sidebar-accent-foreground: 0.9 0 0;
+  --sidebar-border: 0.25 0.02 260;
+  --sidebar-ring: 0.75 0.15 195;
+}
+
+/* Glassmorphism utilities */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+}
+
+.glass-card {
+  background: oklch(0.12 0.01 260 / 0.8);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid oklch(0.35 0.02 260 / 0.4);
+}
+
+/* Glowing effects */
+.glow-primary {
+  box-shadow: 0 0 20px var(--glow-primary), 0 0 40px var(--glow-primary);
+}
+
+.glow-text {
+  text-shadow: 0 0 20px var(--glow-primary);
+}
+
+.glow-border {
+  box-shadow: 0 0 15px var(--glow-primary), inset 0 0 15px oklch(0.75 0.15 195 / 0.1);
+}
+
+/* Orb animation */
+@keyframes orb-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+}
+
+@keyframes orb-glow {
+  0%, 100% {
+    box-shadow: 0 0 30px var(--glow-primary), 0 0 60px var(--glow-primary), 0 0 90px oklch(0.75 0.15 195 / 0.3);
+  }
+  50% {
+    box-shadow: 0 0 40px var(--glow-intense), 0 0 80px var(--glow-intense), 0 0 120px oklch(0.8 0.18 195 / 0.4);
+  }
+}
+
+.orb-speaking {
+  animation: orb-pulse 1.5s ease-in-out infinite, orb-glow 2s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.float-animation {
+  animation: float 4s ease-in-out infinite;
+}
+
+/* Gradient backgrounds */
+.gradient-mesh {
+  background:
+    radial-gradient(at 20% 30%, oklch(0.75 0.15 195 / 0.15) 0, transparent 50%),
+    radial-gradient(at 80% 70%, oklch(0.6 0.12 210 / 0.1) 0, transparent 50%),
+    radial-gradient(at 50% 50%, oklch(0.5 0.08 260 / 0.1) 0, transparent 70%);
+}
+
+/* Progress bar glow */
+.progress-glow {
+  box-shadow: 0 0 10px var(--glow-primary);
+}
+
+/* Smooth transitions */
+.transition-glow {
+  transition: box-shadow 0.3s ease, transform 0.3s ease;
+}
+
+.transition-glow:hover {
+  box-shadow: 0 0 25px var(--glow-primary);
+  transform: translateY(-2px);
+}
