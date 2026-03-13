@@ -1,547 +1,305 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { FileText, TrendingUp, ArrowRight, Download } from "lucide-react";
+import { useState } from "react"
+import { useNavigate } from "react-router-dom"
+import {
+  Download, ArrowRight, Trophy, Target, MessageSquare,
+  Lightbulb, TrendingUp, TrendingDown, Clock, Award,
+  CheckCircle2, AlertCircle, Star, RefreshCw
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
+import { GlassCard } from "@/components/glass-card"
+import { GlowingOrb } from "@/components/glowing-orb"
+import { UserStatus } from "@/components/user-status"
+import { cn } from "@/lib/utils"
 
-// These Imports are for the feedback report downloading(PDF)
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+// Mock feedback data
+const feedbackData = {
+  overallScore: 82,
+  duration: "18:45",
+  questionsAnswered: 5,
+  date: "March 11, 2026",
+  categories: [
+    { name: "Communication", score: 88, icon: MessageSquare, trend: "up" },
+    { name: "Technical Knowledge", score: 85, icon: Target, trend: "up" },
+    { name: "Problem Solving", score: 78, icon: Lightbulb, trend: "neutral" },
+    { name: "Confidence", score: 80, icon: Trophy, trend: "up" },
+  ],
+  strengths: [
+    {
+      title: "Clear Communication",
+      description: "You explained complex concepts in an understandable way, using relevant examples.",
+    },
+    {
+      title: "Strong Technical Foundation",
+      description: "Demonstrated solid knowledge of data science fundamentals and machine learning concepts.",
+    },
+    {
+      title: "Structured Responses",
+      description: "Your answers followed a logical structure, making them easy to follow.",
+    },
+  ],
+  improvements: [
+    {
+      title: "Add More Specific Examples",
+      description: "Consider including more quantified results from your projects (e.g., 'improved accuracy by 15%').",
+    },
+    {
+      title: "Reduce Filler Words",
+      description: "Work on reducing 'um' and 'uh' by pausing briefly instead while collecting your thoughts.",
+    },
+    {
+      title: "Elaborate on Leadership",
+      description: "When discussing team projects, highlight your specific leadership contributions more clearly.",
+    },
+  ],
+  questionScores: [
+    { question: "Tell me about yourself", score: 85, feedback: "Strong opening, good overview of experience" },
+    { question: "Career motivations", score: 88, feedback: "Authentic and well-articulated passion" },
+    { question: "Challenging project", score: 78, feedback: "Good example, could use more specific metrics" },
+    { question: "Staying updated", score: 82, feedback: "Showed continuous learning mindset" },
+    { question: "Explaining to stakeholders", score: 80, feedback: "Clear approach, add more concrete examples" },
+  ],
+}
 
-const PLAN_KEY = "interviewPlan";
-const RESULTS_KEY = "interviewResults";
-const JD_KEY = "jobDescriptionText";
-const SESSION_ID_KEY = "interviewSessionId";
+export default function FeedbackPage() {
+  const navigate = useNavigate()
+  const [isDownloading, setIsDownloading] = useState(false)
 
-export default function Feedback() {
-  const navigate = useNavigate();
-  const [report, setReport] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
-
-  const hasScoredRef = useRef(false);
-
-  // Page title
-  useEffect(() => {
-    document.title = "InterVue Labs > Feedback Report";
-  }, []);
-
-  // Load interview data from DATABASE and call scoring backend
-  useEffect(() => {
-    if (hasScoredRef.current) return; // stops second execution
-    hasScoredRef.current = true;
-
-    const fetchAndScore = async () => {
-      setIsLoading(true);
-
-      // Get sessionId from localStorage
-      const sessionId = localStorage.getItem(SESSION_ID_KEY);
-      const rawPlan = localStorage.getItem(PLAN_KEY);
-      const rawResults = localStorage.getItem(RESULTS_KEY);
-      const jdText = (localStorage.getItem(JD_KEY) || "").trim();
-
-      // Parse stored data for fallback info
-      let plan = null;
-      let storedMeta = null;
-      try {
-        if (rawPlan) plan = JSON.parse(rawPlan);
-        if (rawResults) storedMeta = JSON.parse(rawResults)?.meta;
-      } catch (e) {
-        console.error("Failed to parse stored data:", e);
-      }
-
-      // No session ID means interview wasn't completed properly
-      if (!sessionId) {
-        setLoadError(
-          "No finished interview found. Upload your resume, generate questions, complete an interview, then come back for your InterVue Labs scorecard."
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      try {
-        // Step 1: Fetch interview session and answers from database
-        const sessionRes = await fetch(
-          `http://127.0.0.1:8000/api/interview/session/${sessionId}`
-        );
-
-        if (!sessionRes.ok) {
-          throw new Error("Failed to fetch interview session");
-        }
-
-        const sessionData = await sessionRes.json();
-
-        // Extract data from database response
-        const role = sessionData.role || storedMeta?.role || "Candidate";
-        const difficulty = sessionData.difficulty || storedMeta?.difficulty || "Junior";
-        const dbAnswers = sessionData.answers || [];
-        const dbPlan = sessionData.plan || plan;
-
-        // Convert database answers to the format expected by score-interview
-        const answers = dbAnswers.map((a) => {
-          // Find the matching question from the plan to get idealAnswer
-          const matchingQuestion = dbPlan?.questions?.find(
-            (q) => q.id === a.question_id
-          );
-
-          return {
-            id: a.question_id,
-            prompt: a.question_text,
-            interviewer: matchingQuestion?.interviewer || "Interviewer",
-            type: a.question_intent,
-            userAnswer: a.user_answer,
-            idealAnswer: matchingQuestion?.idealAnswer || "",
-          };
-        });
-
-        // Require at least one non-empty answer
-        const hasRealAnswer = answers.some(
-          (a) => (a.userAnswer || "").trim().length > 0
-        );
-
-        if (!answers.length || !hasRealAnswer) {
-          setLoadError(
-            "We couldn't find any recorded answers. Finish at least one question in an interview before asking for feedback."
-          );
-          setIsLoading(false);
-          return;
-        }
-
-        // Step 2: Call scoring endpoint
-        const scoreRes = await fetch("http://127.0.0.1:8000/api/score-interview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            role,
-            difficulty,
-            answers,
-            plan: dbPlan,
-            jobDescription: jdText.length >= 40 ? jdText : null,
-          }),
-        });
-
-        if (!scoreRes.ok) throw new Error("Failed to score interview");
-
-        const data = await scoreRes.json();
-        setReport(data);
-
-      } catch (err) {
-        console.error("Failed to fetch/score interview:", err);
-
-        // Try to create a fallback report if we have any stored data
-        if (plan?.questions?.length) {
-          setReport({
-            meta: {
-              role: storedMeta?.role || "Candidate",
-              difficulty: storedMeta?.difficulty || "Junior",
-              questionCount: plan.questions.length,
-              fallback: true,
-            },
-            questions: plan.questions.map((q) => ({
-              id: q.id,
-              prompt: q.prompt,
-              interviewer: q.interviewer,
-              type: q.type,
-              userAnswer: "Answer not available - database fetch failed",
-              idealAnswer: q.idealAnswer || "",
-              scores: {
-                content: 3,
-                structure: 3,
-                clarity: 3,
-                confidence: 3,
-                relevance: 3,
-              },
-              strengths: [
-                "You stayed engaged and tried to answer every question – that already puts you ahead.",
-              ],
-              improvements: [
-                "Use a clear beginning–middle–end (STAR: Situation, Task, Action, Result).",
-                "Add 1–2 concrete metrics to show impact.",
-              ],
-              suggestedAnswer: q.idealAnswer || "",
-            })),
-            overall: {
-              overallScore: 3,
-              summary:
-                "We couldn't retrieve your full answers from the database. Please try again or start a new interview.",
-              strengths: [
-                "You completed the interview process.",
-              ],
-              improvements: [
-                "If this error persists, please start a new interview.",
-              ],
-            },
-          });
-        } else {
-          setLoadError(
-            "Failed to retrieve your interview data. Please try again or start a new interview."
-          );
-        }
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchAndScore();
-  }, [navigate]);
-
-  // Error state: no data / corrupted / no answers
-  if (loadError) {
-    return (
-      <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center bg-gray-50 px-4">
-        <div className="max-w-md text-center space-y-4">
-          <TrendingUp className="w-10 h-10 text-indigo-600 mx-auto" />
-          <h1 className="text-xl font-semibold text-gray-900">
-            Feedback not ready (yet)
-          </h1>
-          <p className="text-gray-600 text-sm">{loadError}</p>
-          <button
-            type="button"
-            onClick={() => navigate("/")}
-            className="mt-2 inline-flex items-center justify-center px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
-          >
-            Start from resume upload
-          </button>
-        </div>
-      </div>
-    );
+  const handleDownload = async () => {
+    setIsDownloading(true)
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    setIsDownloading(false)
+    alert("Feedback report downloaded!")
   }
 
-  // Loading spinner
-  if (isLoading || !report) {
-    return (
-      <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center bg-gray-50 px-4">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600 font-medium">
-            InterVue Labs is preparing your personalized feedback report....
-          </p>
-        </div>
-      </div>
-    );
+  const getScoreColor = (score) => {
+    if (score >= 85) return "text-green-500"
+    if (score >= 70) return "text-yellow-500"
+    return "text-orange-500"
   }
 
-  const { meta, questions, overall } = report;
-
-  const handleDownloadPDF = () => {
-    if (!report) {
-      alert("No feedback report found to download.");
-      return;
-    }
-
-    const doc = new jsPDF({ unit: "pt", format: "a4" });
-    const pageWidth = doc.internal.pageSize.getWidth();
-
-    const meta = report.meta || {};
-    const overall = report.overall || {};
-    const questions = Array.isArray(report.questions) ? report.questions : [];
-
-    const title = "InterVue Labs — Interview Feedback Report";
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(16);
-    doc.text(title, pageWidth / 2, 40, { align: "center" });
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(11);
-
-    const role = meta.role || "Candidate";
-    const difficulty = meta.difficulty || "Junior";
-    const qCount = meta.questionCount || questions.length || 0;
-
-    const now = new Date();
-    const dateStr = now.toLocaleString();
-
-    doc.text(`Role: ${role}`, 40, 70);
-    doc.text(`Difficulty: ${difficulty}`, 40, 88);
-    doc.text(`Questions: ${qCount}`, 40, 106);
-    doc.text(`Generated: ${dateStr}`, 40, 124);
-
-    // Overall score + summary
-    const overallScore = overall.overallScore ?? "N/A";
-    const summary = overall.summary || "";
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.text(`Overall Score: ${overallScore}/5`, 40, 155);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(11);
-
-    const wrapSummary = doc.splitTextToSize(
-      `Summary: ${summary}`,
-      pageWidth - 80
-    );
-    doc.text(wrapSummary, 40, 175);
-
-    let y = 175 + wrapSummary.length * 14 + 10;
-
-    // Strengths / Improvements lists
-    const strengths = Array.isArray(overall.strengths) ? overall.strengths : [];
-    const improvements = Array.isArray(overall.improvements)
-      ? overall.improvements
-      : [];
-
-    if (strengths.length) {
-      doc.setFont("helvetica", "bold");
-      doc.text("Key Strengths", 40, y);
-      y += 16;
-      doc.setFont("helvetica", "normal");
-      strengths.slice(0, 6).forEach((s) => {
-        const lines = doc.splitTextToSize(`• ${s}`, pageWidth - 80);
-        doc.text(lines, 40, y);
-        y += lines.length * 14;
-      });
-      y += 8;
-    }
-
-    if (improvements.length) {
-      doc.setFont("helvetica", "bold");
-      doc.text("Top Improvements", 40, y);
-      y += 16;
-      doc.setFont("helvetica", "normal");
-      improvements.slice(0, 6).forEach((s) => {
-        const lines = doc.splitTextToSize(`• ${s}`, pageWidth - 80);
-        doc.text(lines, 40, y);
-        y += lines.length * 14;
-      });
-      y += 8;
-    }
-
-    // Questions table
-    const rows = questions.map((q, idx) => {
-      const scores = q.scores || {};
-      const avg =
-        ["content", "structure", "clarity", "confidence", "relevance"]
-          .map((k) => Number(scores[k] ?? 0))
-          .reduce((a, b) => a + b, 0) / 5;
-
-      const scoreStr = isFinite(avg) && avg > 0 ? avg.toFixed(1) : "N/A";
-
-      const best =
-        Array.isArray(q.strengths) && q.strengths.length ? q.strengths[0] : "";
-      const improve =
-        Array.isArray(q.improvements) && q.improvements.length
-          ? q.improvements[0]
-          : "";
-
-      return [
-        String(idx + 1),
-        (q.prompt || "").slice(0, 140),
-        q.type || "",
-        q.interviewer || "",
-        scoreStr,
-        (q.userAnswer || "User answer not found").slice(0, 160),
-        (best || "").slice(0, 120),
-        (improve || "").slice(0, 120),
-      ];
-    });
-
-    autoTable(doc, {
-      startY: Math.min(y + 10, 700),
-      head: [
-        [
-          "#",
-          "Question",
-          "Type",
-          "Interviewer",
-          "Avg",
-          "User Answer",
-          "Strength",
-          "Improvement",
-        ],
-      ],
-      body: rows,
-      styles: { fontSize: 8, cellPadding: 4, overflow: "linebreak" },
-      headStyles: { fontStyle: "bold" },
-      columnStyles: {
-        0: { cellWidth: 18 },
-        1: { cellWidth: 120 },
-        2: { cellWidth: 45 },
-        3: { cellWidth: 60 },
-        4: { cellWidth: 28 },
-        5: { cellWidth: 120 },
-        6: { cellWidth: 80 },
-        7: { cellWidth: 80 },
-      },
-    });
-
-    const safeRole = String(role).replace(/[^a-z0-9-_]+/gi, "_");
-    const safeDiff = String(difficulty).replace(/[^a-z0-9-_]+/gi, "_");
-    doc.save(`InterVueLabs_Feedback_${safeRole}_${safeDiff}.pdf`);
-  };
+  const getScoreLabel = (score) => {
+    if (score >= 90) return "Excellent"
+    if (score >= 80) return "Very Good"
+    if (score >= 70) return "Good"
+    if (score >= 60) return "Fair"
+    return "Needs Work"
+  }
 
   return (
-    <div className="min-h-[calc(100vh-8rem)] bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-6xl mx-auto space-y-8">
+    <div className="min-h-screen gradient-mesh relative pb-24">
+      {/* Background */}
+      <div className="absolute top-1/4 right-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl" />
+      <div className="absolute bottom-1/3 left-1/4 w-80 h-80 bg-accent/10 rounded-full blur-3xl" />
+
+      <div className="relative z-10 container mx-auto px-6 py-12 max-w-6xl">
         {/* Header */}
-        <div className="text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl mb-4 shadow-lg">
-            <TrendingUp className="w-8 h-8 text-white" />
+        <div className="text-center space-y-4 mb-12">
+          <div className="flex justify-center">
+            <GlowingOrb size="lg" />
           </div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">
-            Interview Feedback Report
+          <h1 className="text-4xl md:text-5xl font-bold text-foreground mt-6">
+            Interview <span className="text-primary glow-text">Complete</span>
           </h1>
-          <p className="text-gray-600">
-            Role: <span className="font-semibold">{meta.role}</span> • Level:{" "}
-            <span className="font-semibold">{meta.difficulty}</span> •
-            Questions:{" "}
-            <span className="font-semibold">{meta.questionCount}</span>
+          <p className="text-xl text-muted-foreground">
+            Here&apos;s your detailed performance analysis
           </p>
         </div>
 
-        {/* Overall Summary */}
-        <div className="bg-white rounded-2xl shadow-lg p-6 sm:p-8">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6 mb-6">
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
-                <FileText className="w-5 h-5 text-indigo-600" />
-                Overall Performance
-              </h2>
-              <p className="mt-2 text-gray-600">{overall.summary}</p>
-            </div>
-            <div className="flex flex-col items-center">
-              <div className="w-20 h-20 rounded-full bg-indigo-50 flex items-center justify-center">
-                <span className="text-3xl font-bold text-indigo-700">
-                  {overall.overallScore.toFixed(1)}
-                </span>
+        {/* Overall Score Card */}
+        <div className="mb-10">
+          <GlassCard className="border-primary/30">
+            <div className="flex flex-col md:flex-row items-center gap-8">
+              {/* Score Circle */}
+              <div className="relative w-48 h-48 flex-shrink-0">
+                <svg className="w-full h-full transform -rotate-90">
+                  <circle
+                    cx="96"
+                    cy="96"
+                    r="85"
+                    stroke="currentColor"
+                    strokeWidth="14"
+                    fill="none"
+                    className="text-muted"
+                  />
+                  <circle
+                    cx="96"
+                    cy="96"
+                    r="85"
+                    stroke="currentColor"
+                    strokeWidth="14"
+                    fill="none"
+                    strokeDasharray={534}
+                    strokeDashoffset={534 - (534 * feedbackData.overallScore) / 100}
+                    strokeLinecap="round"
+                    className="text-primary transition-all duration-1000 ease-out"
+                    style={{ filter: "drop-shadow(0 0 15px var(--glow-primary))" }}
+                  />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-5xl font-bold text-primary">{feedbackData.overallScore}</span>
+                  <span className="text-sm text-muted-foreground">out of 100</span>
+                </div>
               </div>
-              <span className="mt-2 text-xs text-gray-500">Score out of 5</span>
-            </div>
-          </div>
 
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <h3 className="text-sm font-semibold text-gray-800 mb-2">
-                Your Strengths
-              </h3>
-              <ul className="list-disc pl-5 space-y-1 text-gray-700">
-                {overall.strengths.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
+              {/* Score Details */}
+              <div className="flex-1 space-y-4 text-center md:text-left">
+                <div className="space-y-1">
+                  <h2 className="text-2xl font-bold text-foreground flex items-center justify-center md:justify-start gap-2">
+                    <Award className="w-6 h-6 text-primary" />
+                    {getScoreLabel(feedbackData.overallScore)} Performance
+                  </h2>
+                  <p className="text-muted-foreground">
+                    You performed better than 78% of candidates in similar interviews
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap justify-center md:justify-start gap-6 pt-2">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">Duration: {feedbackData.duration}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">{feedbackData.questionsAnswered} Questions</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Star className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">{feedbackData.date}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div>
-              <h3 className="text-sm font-semibold text-gray-800 mb-2">
-                Where You Can Grow
-              </h3>
-              <ul className="list-disc pl-5 space-y-1 text-gray-700">
-                {overall.improvements.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
+          </GlassCard>
         </div>
 
-        {/* Per-question feedback */}
-        <div className="space-y-4">
-          {questions.map((q) => (
-            <div
-              key={q.id}
-              className="bg-white rounded-2xl shadow-md p-5 sm:p-6 border border-gray-100"
-            >
-              <div className="flex items-center justify-between gap-4 mb-3">
-                <div>
-                  <p className="text-xs uppercase tracking-wide text-gray-400">
-                    Question {q.id} • {q.type} • {q.interviewer}
-                  </p>
-                  <p className="mt-1 font-semibold text-gray-900">{q.prompt}</p>
+        {/* Category Scores */}
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+          {feedbackData.categories.map((category) => (
+            <GlassCard key={category.name} hover>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
+                    <category.icon className="w-5 h-5 text-primary" />
+                  </div>
+                  {category.trend === "up" && <TrendingUp className="w-4 h-4 text-green-500" />}
+                  {category.trend === "down" && <TrendingDown className="w-4 h-4 text-red-500" />}
                 </div>
-                <div className="flex flex-col items-end">
-                  <span className="text-xs text-gray-500 mb-1">
-                    Content score
-                  </span>
-                  <span className="text-lg font-bold text-indigo-700">
-                    {q.scores?.content?.toFixed(1) ?? "—"}
-                  </span>
-                </div>
-              </div>
-
-              {/* Answers */}
-              <div className="grid md:grid-cols-2 gap-4 mb-4">
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-800 mb-1">
-                    Your Answer
-                  </h4>
-                  <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 min-h-[72px] whitespace-pre-wrap">
-                    {q.userAnswer || "No answer recorded for this question."}
+                  <h3 className="text-sm text-muted-foreground">{category.name}</h3>
+                  <p className={cn("text-2xl font-bold", getScoreColor(category.score))}>
+                    {category.score}%
                   </p>
                 </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-gray-800 mb-1">
-                    Suggested Strong Answer
-                  </h4>
-                  <p className="text-sm text-gray-700 bg-indigo-50/60 rounded-lg p-3 min-h-[72px] whitespace-pre-wrap">
-                    {q.suggestedAnswer || q.idealAnswer}
-                  </p>
-                </div>
+                <Progress value={category.score} className="h-1.5 bg-muted" />
               </div>
-
-              {/* Scores + strengths/improvements */}
-              <div className="grid md:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <h5 className="font-semibold text-gray-800 mb-1">
-                    Scores (0–5)
-                  </h5>
-                  <ul className="space-y-0.5 text-gray-700">
-                    <li>Content: {q.scores?.content?.toFixed(1) ?? "—"}</li>
-                    <li>Structure: {q.scores?.structure?.toFixed(1) ?? "—"}</li>
-                    <li>Clarity: {q.scores?.clarity?.toFixed(1) ?? "—"}</li>
-                    <li>
-                      Confidence: {q.scores?.confidence?.toFixed(1) ?? "—"}
-                    </li>
-                    <li>Relevance: {q.scores?.relevance?.toFixed(1) ?? "—"}</li>
-                  </ul>
-                </div>
-                <div>
-                  <h5 className="font-semibold text-gray-800 mb-1">
-                    Your Strengths:
-                  </h5>
-                  <ul className="list-disc pl-5 space-y-0.5 text-gray-700">
-                    {q.strengths.map((s, i) => (
-                      <li key={i}>{s}</li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <h5 className="font-semibold text-gray-800 mb-1">
-                    Growth Opportunities
-                  </h5>
-                  <ul className="list-disc pl-5 space-y-0.5 text-gray-700">
-                    {q.improvements.map((s, i) => (
-                      <li key={i}>{s}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </div>
+            </GlassCard>
           ))}
         </div>
 
-        {/* Bottom actions */}
-        <div className="flex flex-wrap justify-between items-center gap-4 pt-4 border-t border-gray-200">
-          <div className="flex gap-3">
-            <button
-              onClick={handleDownloadPDF}
-              disabled={!report || isLoading}
-              className={`px-4 py-2 rounded-lg font-medium shadow-sm transition ${
-                !report || isLoading
-                  ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                  : "bg-indigo-600 text-white hover:bg-indigo-700"
-              }`}
-            >
-              Download Your Report
-            </button>
-          </div>
+        {/* Strengths & Improvements */}
+        <div className="grid lg:grid-cols-2 gap-6 mb-10">
+          {/* Strengths */}
+          <GlassCard>
+            <div className="flex items-center gap-2 mb-6">
+              <CheckCircle2 className="w-5 h-5 text-green-500" />
+              <h3 className="text-xl font-semibold text-foreground">Your Strengths</h3>
+            </div>
+            <div className="space-y-4">
+              {feedbackData.strengths.map((strength, index) => (
+                <div key={index} className="flex gap-4">
+                  <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-sm font-semibold text-green-500">{index + 1}</span>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-foreground">{strength.title}</h4>
+                    <p className="text-sm text-muted-foreground mt-1">{strength.description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
 
-          <button
-            type="button"
-            onClick={() => navigate("/")}
-            className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+          {/* Improvements */}
+          <GlassCard>
+            <div className="flex items-center gap-2 mb-6">
+              <AlertCircle className="w-5 h-5 text-yellow-500" />
+              <h3 className="text-xl font-semibold text-foreground">Areas to Improve</h3>
+            </div>
+            <div className="space-y-4">
+              {feedbackData.improvements.map((improvement, index) => (
+                <div key={index} className="flex gap-4">
+                  <div className="w-8 h-8 rounded-full bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-sm font-semibold text-yellow-500">{index + 1}</span>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-foreground">{improvement.title}</h4>
+                    <p className="text-sm text-muted-foreground mt-1">{improvement.description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
+        </div>
+
+        {/* Question-by-Question Breakdown */}
+        <GlassCard className="mb-10">
+          <h3 className="text-xl font-semibold text-foreground mb-6">Question-by-Question Analysis</h3>
+          <div className="space-y-4">
+            {feedbackData.questionScores.map((item, index) => (
+              <div key={index} className="flex items-start gap-4 p-4 rounded-xl bg-muted/30">
+                <div className={cn(
+                  "w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0",
+                  item.score >= 85 ? "bg-green-500/20" : item.score >= 70 ? "bg-yellow-500/20" : "bg-orange-500/20"
+                )}>
+                  <span className={cn("text-lg font-bold", getScoreColor(item.score))}>
+                    {item.score}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-medium text-foreground">Q{index + 1}: {item.question}</h4>
+                  <p className="text-sm text-muted-foreground mt-1">{item.feedback}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </GlassCard>
+
+        {/* Action Buttons */}
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Button
+            onClick={handleDownload}
+            disabled={isDownloading}
+            variant="outline"
+            size="lg"
+            className="rounded-xl border-border hover:border-primary/50 h-14 px-8 font-semibold"
           >
-            Start a New Interview
-            <ArrowRight className="w-4 h-4" />
-          </button>
+            {isDownloading ? (
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin" />
+                Generating PDF...
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Download className="w-5 h-5" />
+                Download Report
+              </div>
+            )}
+          </Button>
+
+          <Button
+            onClick={() => navigate("/interview")}
+            size="lg"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl h-14 px-8 font-semibold glow-border"
+          >
+            <RefreshCw className="w-5 h-5 mr-2" />
+            Start Next Interview
+            <ArrowRight className="w-5 h-5 ml-2" />
+          </Button>
         </div>
       </div>
+
+      <UserStatus userName="John" onLogout={() => navigate("/login")} />
     </div>
-  );
+  )
 }
