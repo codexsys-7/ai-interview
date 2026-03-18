@@ -11,17 +11,60 @@ import { GlassCard } from "@/components/glass-card"
 import { GlowingOrb } from "@/components/glowing-orb"
 import { UserStatus } from "@/components/user-status"
 import { cn } from "@/lib/utils"
+import { apiCreateSession, apiStartWithAudio } from "@/api/client"
 
 export default function InterviewPage() {
   const navigate = useNavigate()
   const [selectedType, setSelectedType] = useState(null)
   const [jobDescription, setJobDescription] = useState("")
   const [isStarting, setIsStarting] = useState(false)
+  const [startError, setStartError] = useState("")
 
   const handleStartInterview = async () => {
     setIsStarting(true)
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    navigate("/interview/arena")
+    setStartError("")
+    try {
+      const resumeData = JSON.parse(localStorage.getItem("resumeData") || "null")
+      const role = resumeData?.fallbackRoles?.[0] || "Software Engineer"
+      const difficulty = "medium"
+      const totalQuestions = 10
+
+      // 1. Create session
+      const sessionResp = await apiCreateSession({
+        role,
+        difficulty,
+        questionCount: totalQuestions,
+        interviewerNames: ["AI Interviewer"],
+        plan: null,
+      })
+      const sessionId = sessionResp.session_id
+
+      // 2. Get first question with audio
+      const startResp = await apiStartWithAudio({
+        sessionId,
+        role,
+        difficulty,
+        totalQuestions,
+        generateAudio: true,
+      })
+
+      // 3. Save session info and navigate
+      const sessionData = {
+        sessionId,
+        role,
+        difficulty,
+        totalQuestions,
+        firstQuestion: startResp.first_question,
+        jobDescription: selectedType === "job-description" ? jobDescription : null,
+        answeredQuestions: [],
+      }
+      localStorage.setItem("interviewSession", JSON.stringify(sessionData))
+      navigate("/interview/arena", { state: { sessionData } })
+    } catch (err) {
+      setStartError(err.message || "Failed to start interview. Is the backend running?")
+    } finally {
+      setIsStarting(false)
+    }
   }
 
   return (
@@ -174,6 +217,15 @@ export default function InterviewPage() {
           </div>
         )}
 
+        {/* Start Error */}
+        {startError && (
+          <div className="w-full max-w-2xl mb-4">
+            <div className="rounded-xl bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive text-center">
+              {startError}
+            </div>
+          </div>
+        )}
+
         {/* Start Button */}
         <Button
           onClick={handleStartInterview}
@@ -214,7 +266,14 @@ export default function InterviewPage() {
         </div>
       </div>
 
-      <UserStatus userName="John" onLogout={() => navigate("/login")} />
+      <UserStatus
+        userName={JSON.parse(localStorage.getItem("user") || "{}").full_name || "User"}
+        onLogout={() => {
+          localStorage.removeItem("authToken")
+          localStorage.removeItem("user")
+          navigate("/login")
+        }}
+      />
     </div>
   )
 }

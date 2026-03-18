@@ -8,11 +8,13 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { GlassCard } from "@/components/glass-card"
 import { GlowingOrb } from "@/components/glowing-orb"
 import { cn } from "@/lib/utils"
+import { apiSignup } from "@/api/client"
 
 export default function SignupPage() {
   const navigate = useNavigate()
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState("")
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -33,10 +35,18 @@ export default function SignupPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    setError("")
     setIsLoading(true)
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    setIsLoading(false)
-    navigate("/home")
+    try {
+      const data = await apiSignup(formData.name, formData.email, formData.password)
+      localStorage.setItem("authToken", data.token)
+      localStorage.setItem("user", JSON.stringify(data.user))
+      navigate("/home")
+    } catch (err) {
+      setError(err.message || "Signup failed. Please try again.")
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -89,6 +99,12 @@ export default function SignupPage() {
               <h2 className="text-3xl font-bold text-foreground">Create Account</h2>
               <p className="text-muted-foreground">Start your interview prep journey</p>
             </div>
+
+            {error && (
+              <div className="rounded-xl bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive">
+                {error}
+              </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="space-y-2">

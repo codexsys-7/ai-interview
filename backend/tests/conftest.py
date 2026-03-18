@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Load the real .env file if it exists (this gives us the real DATABASE_URL)
 from dotenv import load_dotenv
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
-load_dotenv(env_path)
+load_dotenv(env_path, override=True)
 
 # Only set dummy values if not already set by .env
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test_db")

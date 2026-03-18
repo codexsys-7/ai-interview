@@ -6,6 +6,7 @@ import { GlassCard } from "@/components/glass-card"
 import { GlowingOrb } from "@/components/glowing-orb"
 import { UserStatus } from "@/components/user-status"
 import { cn } from "@/lib/utils"
+import { apiParseResume } from "@/api/client"
 
 export default function HomePage() {
   const navigate = useNavigate()
@@ -13,6 +14,7 @@ export default function HomePage() {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState("")
 
   const handleDragOver = (e) => {
     e.preventDefault()
@@ -35,10 +37,18 @@ export default function HomePage() {
   const handleFileUpload = async (file) => {
     setUploadedFile(file)
     setIsUploading(true)
-    // Simulate upload
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-    setIsUploading(false)
-    navigate("/resume-analysis")
+    setUploadError("")
+    try {
+      const result = await apiParseResume(file)
+      const resumeData = { ...result, fileName: file.name }
+      localStorage.setItem("resumeData", JSON.stringify(resumeData))
+      navigate("/resume-analysis", { state: { resumeData } })
+    } catch (err) {
+      setUploadError(err.message || "Failed to analyze resume. Please try again.")
+      setUploadedFile(null)
+    } finally {
+      setIsUploading(false)
+    }
   }
 
   const handleFileSelect = (e) => {
@@ -75,6 +85,11 @@ export default function HomePage() {
 
         {/* Upload Section */}
         <div className="w-full max-w-2xl mb-16">
+          {uploadError && (
+            <div className="mb-4 rounded-xl bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive text-center">
+              {uploadError}
+            </div>
+          )}
           <input
             ref={fileInputRef}
             type="file"
@@ -198,8 +213,12 @@ export default function HomePage() {
 
       {/* User Status */}
       <UserStatus
-        userName="John"
-        onLogout={() => navigate("/login")}
+        userName={JSON.parse(localStorage.getItem("user") || "{}").full_name || "User"}
+        onLogout={() => {
+          localStorage.removeItem("authToken")
+          localStorage.removeItem("user")
+          navigate("/login")
+        }}
       />
     </div>
   )
