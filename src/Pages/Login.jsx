@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { GlassCard } from "@/components/glass-card"
 import { GlowingOrb } from "@/components/glowing-orb"
+import { apiLogin } from "@/api/client"
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -13,14 +14,22 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [error, setError] = useState("")
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    setError("")
     setIsLoading(true)
-    // Simulate login
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    setIsLoading(false)
-    navigate("/home")
+    try {
+      const data = await apiLogin(email, password)
+      localStorage.setItem("authToken", data.token)
+      localStorage.setItem("user", JSON.stringify(data.user))
+      navigate("/home")
+    } catch (err) {
+      setError(err.message || "Login failed. Please try again.")
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -75,6 +84,12 @@ export default function LoginPage() {
               <h2 className="text-3xl font-bold text-foreground">Welcome Back</h2>
               <p className="text-muted-foreground">Sign in to continue your journey</p>
             </div>
+
+            {error && (
+              <div className="rounded-xl bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive">
+                {error}
+              </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="space-y-2">

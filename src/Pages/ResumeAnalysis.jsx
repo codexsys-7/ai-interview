@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useLocation } from "react-router-dom"
 import {
   FileText,
   Briefcase,
@@ -19,60 +19,91 @@ import { GlassCard } from "@/components/glass-card"
 import { GlowingOrb } from "@/components/glowing-orb"
 import { UserStatus } from "@/components/user-status"
 
-// Mock data for resume analysis
-const resumeData = {
-  name: "John Doe",
-  email: "john.doe@email.com",
-  phone: "+1 234 567 8900",
-  overallScore: 85,
-  sections: [
-    { name: "Experience", score: 90, icon: Briefcase },
-    { name: "Education", score: 88, icon: GraduationCap },
-    { name: "Skills", score: 82, icon: Code },
-    { name: "Achievements", score: 78, icon: Award },
-  ],
-  skills: [
-    { name: "Python", level: 90 },
-    { name: "Machine Learning", level: 85 },
-    { name: "Data Analysis", level: 88 },
-    { name: "SQL", level: 82 },
-    { name: "Communication", level: 75 },
-  ],
-  strengths: [
-    "Strong technical background in data science",
-    "Relevant industry experience",
-    "Clear quantified achievements",
-    "Well-structured resume format",
-  ],
-  improvements: [
-    "Add more leadership examples",
-    "Include specific project outcomes",
-    "Expand on soft skills section",
-  ],
+// Map backend response to UI-ready structure
+function mapResumeData(raw) {
+  if (!raw) return null
+
+  const atsScore = raw.atsScore ?? 75
+  const rare = raw.rare || {}
+
+  // Section scores from rare metrics (0-5 → 0-100)
+  const toPercent = (v) => Math.round((parseFloat(v) || 0) * 20)
+  const sections = [
+    { name: "Readability",    score: toPercent(rare.readability),   icon: FileText },
+    { name: "Applicability",  score: toPercent(rare.applicability), icon: Briefcase },
+    { name: "Remarkability",  score: toPercent(rare.remarkability), icon: Award },
+    { name: "Skills Match",   score: atsScore,                       icon: Code },
+  ]
+
+  // Skills — backend returns strings; assign staggered levels for visual
+  const skills = (raw.skills || []).slice(0, 10).map((name, i) => ({
+    name,
+    level: Math.max(60, 95 - i * 4),
+  }))
+
+  // Strengths from keywords if no matched keywords
+  const strengths = (raw.matchedKeywords || raw.keywords || []).slice(0, 4).map(
+    (kw) => `Strong match: ${kw}`
+  )
+  if (strengths.length === 0 && skills.length > 0) {
+    strengths.push(...skills.slice(0, 3).map((s) => `Demonstrated ${s.name} proficiency`))
+  }
+
+  // Improvements from atsSuggestions
+  const improvements = (raw.atsSuggestions || []).slice(0, 4)
+
+  return {
+    fileName: raw.fileName || "resume.pdf",
+    overallScore: atsScore,
+    sections,
+    skills,
+    strengths,
+    improvements,
+    recommendation: raw.hasJobDescription
+      ? "Your resume has been analyzed against the job description. Focus on the matched keywords and address the missing ones highlighted above to maximize your ATS score."
+      : "Your resume looks solid. Quantify your achievements with metrics and tailor keywords to your target role for the best interview preparation.",
+  }
 }
 
 export default function ResumeAnalysisPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [isAnalyzing, setIsAnalyzing] = useState(true)
   const [progress, setProgress] = useState(0)
+  const [resumeData, setResumeData] = useState(null)
 
+  // Load data: router state → localStorage → redirect
   useEffect(() => {
-    if (isAnalyzing) {
-      const interval = setInterval(() => {
-        setProgress((prev) => {
-          if (prev >= 100) {
-            clearInterval(interval)
-            setTimeout(() => {
-              setIsAnalyzing(false)
-            }, 500)
-            return 100
-          }
-          return prev + 2
-        })
-      }, 50)
-      return () => clearInterval(interval)
+    const raw =
+      location.state?.resumeData ||
+      JSON.parse(localStorage.getItem("resumeData") || "null")
+
+    if (!raw) {
+      navigate("/home", { replace: true })
+      return
     }
+
+    const mapped = mapResumeData(raw)
+    setResumeData(mapped)
+  }, [])
+
+  // Progress bar animation while "analyzing"
+  useEffect(() => {
+    if (!isAnalyzing) return
+    const interval = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 100) {
+          clearInterval(interval)
+          setTimeout(() => setIsAnalyzing(false), 400)
+          return 100
+        }
+        return prev + 3
+      })
+    }, 40)
+    return () => clearInterval(interval)
   }, [isAnalyzing])
+
+  const userName = JSON.parse(localStorage.getItem("user") || "{}").full_name || "User"
 
   if (isAnalyzing) {
     return (
@@ -80,18 +111,12 @@ export default function ResumeAnalysisPage() {
         <div className="text-center space-y-8">
           <GlowingOrb size="xl" isSpeaking={true} />
           <div className="space-y-4">
-            <h2 className="text-3xl font-bold text-foreground">
-              Analyzing Your Resume
-            </h2>
-            <p className="text-muted-foreground">
-              Our AI is extracting insights...
-            </p>
+            <h2 className="text-3xl font-bold text-foreground">Analyzing Your Resume</h2>
+            <p className="text-muted-foreground">Our AI is extracting insights...</p>
           </div>
           <div className="w-80 mx-auto space-y-2">
             <Progress value={progress} className="h-2 bg-muted" />
-            <p className="text-sm text-muted-foreground">
-              {progress}% Complete
-            </p>
+            <p className="text-sm text-muted-foreground">{progress}% Complete</p>
           </div>
           <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
             <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
@@ -105,6 +130,8 @@ export default function ResumeAnalysisPage() {
     )
   }
 
+  if (!resumeData) return null
+
   return (
     <div className="min-h-screen gradient-mesh relative">
       {/* Background */}
@@ -117,12 +144,8 @@ export default function ResumeAnalysisPage() {
           <div className="flex items-center gap-4">
             <GlowingOrb size="md" />
             <div>
-              <h1 className="text-3xl font-bold text-foreground">
-                Resume Analysis
-              </h1>
-              <p className="text-muted-foreground">
-                AI-powered insights for {resumeData.name}
-              </p>
+              <h1 className="text-3xl font-bold text-foreground">Resume Analysis</h1>
+              <p className="text-muted-foreground">AI-powered insights for {userName}</p>
             </div>
           </div>
           <Button
@@ -141,27 +164,13 @@ export default function ResumeAnalysisPage() {
             {/* Overall Score */}
             <GlassCard>
               <div className="text-center space-y-4">
-                <h3 className="text-lg font-semibold text-foreground">
-                  Overall Score
-                </h3>
+                <h3 className="text-lg font-semibold text-foreground">ATS Score</h3>
                 <div className="relative w-40 h-40 mx-auto">
                   <svg className="w-full h-full transform -rotate-90">
+                    <circle cx="80" cy="80" r="70" stroke="currentColor" strokeWidth="12" fill="none" className="text-muted" />
                     <circle
-                      cx="80"
-                      cy="80"
-                      r="70"
-                      stroke="currentColor"
-                      strokeWidth="12"
-                      fill="none"
-                      className="text-muted"
-                    />
-                    <circle
-                      cx="80"
-                      cy="80"
-                      r="70"
-                      stroke="currentColor"
-                      strokeWidth="12"
-                      fill="none"
+                      cx="80" cy="80" r="70"
+                      stroke="currentColor" strokeWidth="12" fill="none"
                       strokeDasharray={440}
                       strokeDashoffset={440 - (440 * resumeData.overallScore) / 100}
                       strokeLinecap="round"
@@ -170,17 +179,15 @@ export default function ResumeAnalysisPage() {
                     />
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-4xl font-bold text-primary">
-                      {resumeData.overallScore}
-                    </span>
-                    <span className="text-sm text-muted-foreground">
-                      out of 100
-                    </span>
+                    <span className="text-4xl font-bold text-primary">{resumeData.overallScore}</span>
+                    <span className="text-sm text-muted-foreground">out of 100</span>
                   </div>
                 </div>
                 <div className="flex items-center justify-center gap-2">
                   <TrendingUp className="w-4 h-4 text-green-500" />
-                  <span className="text-sm text-green-500">Above average</span>
+                  <span className="text-sm text-green-500">
+                    {resumeData.overallScore >= 80 ? "Above average" : resumeData.overallScore >= 60 ? "Average" : "Needs improvement"}
+                  </span>
                 </div>
               </div>
             </GlassCard>
@@ -193,18 +200,14 @@ export default function ResumeAnalysisPage() {
                     <User className="w-6 h-6 text-primary" />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-foreground">
-                      {resumeData.name}
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      {resumeData.email}
-                    </p>
+                    <h3 className="font-semibold text-foreground">{userName}</h3>
+                    <p className="text-sm text-muted-foreground">Candidate</p>
                   </div>
                 </div>
                 <div className="pt-3 border-t border-border">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <FileText className="w-4 h-4" />
-                    resume_john_doe.pdf
+                    {resumeData.fileName}
                   </div>
                 </div>
               </div>
@@ -212,22 +215,16 @@ export default function ResumeAnalysisPage() {
 
             {/* Section Scores */}
             <GlassCard>
-              <h3 className="text-lg font-semibold text-foreground mb-4">
-                Section Scores
-              </h3>
+              <h3 className="text-lg font-semibold text-foreground mb-4">Section Scores</h3>
               <div className="space-y-4">
                 {resumeData.sections.map((section) => (
                   <div key={section.name} className="space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <section.icon className="w-4 h-4 text-primary" />
-                        <span className="text-sm text-foreground">
-                          {section.name}
-                        </span>
+                        <span className="text-sm text-foreground">{section.name}</span>
                       </div>
-                      <span className="text-sm font-medium text-primary">
-                        {section.score}%
-                      </span>
+                      <span className="text-sm font-medium text-primary">{section.score}%</span>
                     </div>
                     <Progress value={section.score} className="h-1.5 bg-muted" />
                   </div>
@@ -242,30 +239,28 @@ export default function ResumeAnalysisPage() {
             <GlassCard>
               <div className="flex items-center gap-2 mb-6">
                 <Code className="w-5 h-5 text-primary" />
-                <h3 className="text-lg font-semibold text-foreground">
-                  Detected Skills
-                </h3>
+                <h3 className="text-lg font-semibold text-foreground">Detected Skills</h3>
               </div>
-              <div className="grid sm:grid-cols-2 gap-4">
-                {resumeData.skills.map((skill) => (
-                  <div key={skill.name} className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-foreground">
-                        {skill.name}
-                      </span>
-                      <span className="text-sm text-muted-foreground">
-                        {skill.level}%
-                      </span>
+              {resumeData.skills.length > 0 ? (
+                <div className="grid sm:grid-cols-2 gap-4">
+                  {resumeData.skills.map((skill) => (
+                    <div key={skill.name} className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-foreground">{skill.name}</span>
+                        <span className="text-sm text-muted-foreground">{skill.level}%</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-primary to-accent progress-glow transition-all duration-1000"
+                          style={{ width: `${skill.level}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="h-2 rounded-full bg-muted overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-primary to-accent progress-glow transition-all duration-1000"
-                        style={{ width: `${skill.level}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No skills detected. Ensure your resume mentions specific technologies and tools.</p>
+              )}
             </GlassCard>
 
             {/* Strengths & Improvements */}
@@ -273,38 +268,38 @@ export default function ResumeAnalysisPage() {
               <GlassCard>
                 <div className="flex items-center gap-2 mb-4">
                   <CheckCircle2 className="w-5 h-5 text-green-500" />
-                  <h3 className="text-lg font-semibold text-foreground">
-                    Strengths
-                  </h3>
+                  <h3 className="text-lg font-semibold text-foreground">Strengths</h3>
                 </div>
                 <ul className="space-y-3">
-                  {resumeData.strengths.map((strength, index) => (
-                    <li key={index} className="flex items-start gap-2">
-                      <div className="w-1.5 h-1.5 rounded-full bg-green-500 mt-2" />
-                      <span className="text-sm text-muted-foreground">
-                        {strength}
-                      </span>
-                    </li>
-                  ))}
+                  {resumeData.strengths.length > 0 ? (
+                    resumeData.strengths.map((strength, index) => (
+                      <li key={index} className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-green-500 mt-2 flex-shrink-0" />
+                        <span className="text-sm text-muted-foreground">{strength}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-muted-foreground">Analysis complete — see your ATS score above.</li>
+                  )}
                 </ul>
               </GlassCard>
 
               <GlassCard>
                 <div className="flex items-center gap-2 mb-4">
                   <AlertCircle className="w-5 h-5 text-yellow-500" />
-                  <h3 className="text-lg font-semibold text-foreground">
-                    Areas to Improve
-                  </h3>
+                  <h3 className="text-lg font-semibold text-foreground">Areas to Improve</h3>
                 </div>
                 <ul className="space-y-3">
-                  {resumeData.improvements.map((improvement, index) => (
-                    <li key={index} className="flex items-start gap-2">
-                      <div className="w-1.5 h-1.5 rounded-full bg-yellow-500 mt-2" />
-                      <span className="text-sm text-muted-foreground">
-                        {improvement}
-                      </span>
-                    </li>
-                  ))}
+                  {resumeData.improvements.length > 0 ? (
+                    resumeData.improvements.map((improvement, index) => (
+                      <li key={index} className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-yellow-500 mt-2 flex-shrink-0" />
+                        <span className="text-sm text-muted-foreground">{improvement}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-muted-foreground">Great job! No major improvements suggested.</li>
+                  )}
                 </ul>
               </GlassCard>
             </div>
@@ -316,16 +311,9 @@ export default function ResumeAnalysisPage() {
                   <Sparkles className="w-6 h-6 text-primary" />
                 </div>
                 <div className="space-y-2">
-                  <h3 className="text-lg font-semibold text-foreground">
-                    AI Recommendation
-                  </h3>
+                  <h3 className="text-lg font-semibold text-foreground">AI Recommendation</h3>
                   <p className="text-muted-foreground text-sm leading-relaxed">
-                    Based on your resume analysis, you have a strong technical
-                    foundation with excellent experience in data science. I
-                    recommend focusing on behavioral questions about leadership
-                    and team collaboration during your interview practice. Your
-                    quantified achievements are impressive - be ready to discuss
-                    them in detail.
+                    {resumeData.recommendation}
                   </p>
                 </div>
               </div>
@@ -346,7 +334,14 @@ export default function ResumeAnalysisPage() {
         </div>
       </div>
 
-      <UserStatus userName="John" onLogout={() => navigate("/login")} />
+      <UserStatus
+        userName={userName}
+        onLogout={() => {
+          localStorage.removeItem("authToken")
+          localStorage.removeItem("user")
+          navigate("/login")
+        }}
+      />
     </div>
   )
 }
