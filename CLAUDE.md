@@ -13,6 +13,7 @@ AI-powered interview simulator that conducts intelligent, conversational intervi
 ## Tech Stack
 
 ### Backend
+
 - **Framework:** FastAPI (Python 3.11+)
 - **Database:** PostgreSQL (Supabase)
 - **Authentication:** JWT
@@ -23,6 +24,7 @@ AI-powered interview simulator that conducts intelligent, conversational intervi
 - **Audio:** MP3 generation and caching
 
 ### Frontend
+
 - **Framework:** React 18
 - **Build Tool:** Vite
 - **Styling:** Tailwind CSS v3
@@ -31,6 +33,7 @@ AI-powered interview simulator that conducts intelligent, conversational intervi
 - **Animations:** CSS animations + Framer Motion
 
 ### AI Services
+
 - **Question Generation:** GPT-4o-mini with contextual prompts
 - **Pattern Detection:** Semantic search across answer embeddings
 - **Contradiction Detection:** LLM-based with confidence scoring
@@ -40,6 +43,7 @@ AI-powered interview simulator that conducts intelligent, conversational intervi
 ---
 
 ## Environment Variables
+
 ```bash
 # Backend (.env)
 OPENAI_API_KEY=sk-...              # LLM + TTS + embeddings
@@ -56,6 +60,7 @@ VITE_API_URL=http://localhost:8000  # Dev
 ---
 
 ## Project Structure
+
 ```
 InterVue-Labs/
 ├── backend/
@@ -119,6 +124,7 @@ InterVue-Labs/
 ## System Architecture
 
 ### High-Level Flow
+
 ```
 User speaks answer
     ↓
@@ -157,6 +163,7 @@ User hears question → answers → cycle repeats
 ### Key Tables
 
 **interview_sessions**
+
 - `id` (UUID, PK)
 - `user_id` (UUID, FK)
 - `role` (string)
@@ -164,6 +171,7 @@ User hears question → answers → cycle repeats
 - `started_at`, `completed_at`
 
 **interview_answers**
+
 - `id` (UUID, PK)
 - `session_id` (UUID, FK)
 - `question_id` (int)
@@ -175,6 +183,7 @@ User hears question → answers → cycle repeats
 - `created_at`
 
 **job_descriptions**
+
 - `id` (UUID, PK)
 - `session_id` (UUID, FK)
 - `company_name`, `job_title`
@@ -188,16 +197,19 @@ User hears question → answers → cycle repeats
 ### 1. Memory & Context
 
 **Embedding Generation:**
+
 - Every answer → OpenAI `text-embedding-3-small` (1536 dimensions)
 - Stored as JSON in database
 - Used for semantic similarity search
 
 **Semantic Search:**
+
 - Cosine similarity to find related answers
 - Threshold: >0.85 for strong relevance
 - Powers referencing questions
 
 **Conversation Context:**
+
 - Builds summary of all answers
 - Extracts topics discussed
 - Tracks recent context (last 5 answers)
@@ -205,17 +217,20 @@ User hears question → answers → cycle repeats
 ### 2. Pattern Detection
 
 **Contradiction Detection:**
+
 - Semantic similarity + LLM analysis
 - Confidence scoring (0.0-1.0)
 - Timeline overlap detection
 - Only challenges if confidence >0.7 and question >=5
 
 **Topic Repetition:**
+
 - Tracks semantic mentions (not just keywords)
 - "Python" = "programming in Python" = "used Python"
 - Triggers deep dive after 3+ mentions
 
 **Answer Quality Analysis:**
+
 - STAR format completeness
 - Specificity score (concrete vs vague)
 - Word count, metrics presence
@@ -232,6 +247,7 @@ User hears question → answers → cycle repeats
 5. **Standard Question** (default progression)
 
 **Conversation Stages:**
+
 - Early (Q1-3): More lenient, encouraging
 - Mid (Q4-7): Balanced, probing
 - Late (Q8+): Expect higher quality
@@ -249,6 +265,7 @@ User hears question → answers → cycle repeats
 7. **Job-Specific** - Tailored to JD
 
 **Question Sources:**
+
 - Real question bank (100+ questions from actual interviews)
 - LLM-generated (contextual, based on conversation)
 - Hybrid approach (real question + AI enhancement)
@@ -256,11 +273,13 @@ User hears question → answers → cycle repeats
 ### 5. Personality & Responses
 
 **50+ Response Variations:**
+
 - Acknowledgments: "Great example!", "I appreciate the detail", "Interesting perspective"
 - Follow-ups: "Tell me more", "Can you elaborate?", "Walk me through that"
 - Transitions: "Let's shift gears", "Moving on", "Now, about..."
 
 **Response Selection:**
+
 - Tracks last 5 responses to avoid repetition
 - Quality-based selection (excellent vs adequate vs weak)
 - Context-aware (early vs late interview)
@@ -268,17 +287,20 @@ User hears question → answers → cycle repeats
 ### 6. Audio System
 
 **TTS Generation:**
+
 - OpenAI TTS API (tts-1 model)
 - Voices: alloy (default), nova (warm), echo (authoritative)
 - Speed: 0.9-1.0 (clear, measured)
 - Context-aware (questions slower, acknowledgments normal)
 
 **Audio Caching:**
+
 - MP3 files saved to `backend/audio_cache/`
 - Cache key = hash(text + voice + speed)
 - Reduces API costs, faster responses
 
 **Audio Queue:**
+
 - Sequential playback (no overlap)
 - Order: acknowledgment → probe → transition → question
 - Visual sync with glowing orb
@@ -290,36 +312,43 @@ User hears question → answers → cycle repeats
 ### Core Interview Flow
 
 **POST /api/interview/start-with-audio**
+
 - Starts interview session
 - Returns first question + audio
 - Input: `{user_id, role, difficulty, generate_audio}`
 
 **POST /api/interview/submit-answer-realtime**
+
 - Submits answer + gets AI response + next question
 - Input: `{session_id, question_id, user_answer, transcript_raw, audio_duration_seconds, ...}`
 - Returns: `{answer_stored, ai_response, next_question, flow_control}`
 
 **POST /api/interview/submit-followup**
+
 - Handles follow-up elaborations
 - Re-analyzes combined quality
 - Decides if ready to proceed
 
 **GET /api/interview/conversation-state/{session_id}**
+
 - Returns conversation summary, topics, patterns
 - Useful for debugging
 
 ### Audio & Job Description
 
 **GET /api/audio/{filename}**
+
 - Serves MP3 files from cache
 - Headers: Content-Type: audio/mpeg
 
 **POST /api/interview/start-with-job-description**
+
 - Starts interview with JD introduction
 - Generates warm welcome + role overview
 - Returns introduction sequence + first question
 
 **POST /api/job-description/parse**
+
 - Parses uploaded JD (PDF/text)
 - Extracts structured data via LLM
 
@@ -330,6 +359,7 @@ User hears question → answers → cycle repeats
 ### Main UI (Interview.jsx)
 
 **State Management:**
+
 - `currentQuestion` - Active question
 - `isAISpeaking` - Audio playback status
 - `audioQueue` - Sequential audio clips
@@ -338,12 +368,13 @@ User hears question → answers → cycle repeats
 - `questionMetadata` - Patterns, stage, decision reason
 
 **Audio Queue System:**
+
 ```javascript
 audioQueue: [
-  {url: "/api/audio/ack_abc.mp3", label: "acknowledgment"},
-  {url: "/api/audio/probe_def.mp3", label: "follow_up"},
-  {url: "/api/audio/question_ghi.mp3", label: "question"}
-]
+  { url: "/api/audio/ack_abc.mp3", label: "acknowledgment" },
+  { url: "/api/audio/probe_def.mp3", label: "follow_up" },
+  { url: "/api/audio/question_ghi.mp3", label: "question" },
+];
 ```
 
 Plays sequentially with visual feedback.
@@ -351,6 +382,7 @@ Plays sequentially with visual feedback.
 ### Visual Components
 
 **GlowingOrb.jsx** (🔵 AI Presence)
+
 - Appears when AI speaking
 - Blue gradient orb, 120px diameter
 - Pulsing animation (1.2s rhythm)
@@ -358,12 +390,14 @@ Plays sequentially with visual feedback.
 - Premium sci-fi aesthetic
 
 **ConversationIndicator.jsx**
+
 - 🔗 Reference badge ("Connected to Q2")
 - ✨ Pattern detection ("Python mentioned 3x")
 - 🤔 Clarification badge
 - Question type badges (standard/follow-up/challenge/deep-dive/reference)
 
 **AIResponseDisplay.jsx**
+
 - Shows acknowledgments, probes, transitions
 - Speech bubble style
 - Color-coded by type
@@ -375,16 +409,19 @@ Plays sequentially with visual feedback.
 ### Test Coverage
 
 **Unit Tests (28+ tests):**
+
 - Embedding service (7 tests)
 - Conversation context (7 tests)
 - Contradiction detector (7 tests)
 - Semantic search API (7 tests)
 
 **Integration Tests (6 tests):**
+
 - End-to-end workflows
 - Multi-service orchestration
 
 **Edge Cases (12 tests):**
+
 - Long answers (500+ words)
 - One-word answers
 - Special characters
@@ -392,6 +429,7 @@ Plays sequentially with visual feedback.
 - 100+ answer sessions
 
 **Manual Test Scripts:**
+
 - `test_answer_storage_flow.sh`
 - `test_performance.sh`
 - `success_criteria_check.sh`
@@ -399,6 +437,7 @@ Plays sequentially with visual feedback.
 ### Success Criteria
 
 **Core Functionality:**
+
 - ✅ Semantic search finds related answers
 - ✅ Repetition detected (>85% accuracy)
 - ✅ Contradictions detected (<2s)
@@ -406,6 +445,7 @@ Plays sequentially with visual feedback.
 - ✅ Embeddings auto-generated
 
 **Performance:**
+
 - Answer processing: <3 seconds
 - Audio generation: <2 seconds
 - Pattern detection: Real-time (<500ms)
@@ -416,11 +456,13 @@ Plays sequentially with visual feedback.
 ## ✅ Completed Phases
 
 ### Phase 1A: Answer Storage (COMPLETE)
+
 - Database schema: `interview_answers` table
 - API: POST /submit, GET /answers/{session_id}
 - Real-time storage with metadata
 
 ### Phase 1B: Memory & Intelligence (COMPLETE)
+
 - Embedding generation (1536 dimensions)
 - Semantic search (cosine similarity)
 - Conversation context builder
@@ -431,11 +473,13 @@ Plays sequentially with visual feedback.
 ### Phase 1C: Intelligent Two-Way Conversation (COMPLETE)
 
 **Tasks 1-3: Core Intelligence**
+
 - ✅ Task 1: Intelligent Question Generator
 - ✅ Task 2: Interview Decision Engine
 - ✅ Task 3: Interview Orchestrator
 
 **Tasks 4-7: API & UI Foundation**
+
 - ✅ Task 4: API Endpoints (Basic)
 - ✅ Task 5: Prompt Templates (7 types)
 - ✅ Task 5B: Real Question Integration (100+ questions)
@@ -443,19 +487,23 @@ Plays sequentially with visual feedback.
 - ✅ Task 7: Visual Indicators
 
 **Tasks 8-9: Personality & Real-Time**
+
 - ✅ Task 8: Interviewer Personality (50+ variations)
 - ✅ Task 9: Real-Time Response Generator
 
 **Tasks 10-12: Voice & Audio**
+
 - ✅ Task 10: TTS Service (OpenAI integration)
 - ✅ Task 11: Real-Time Orchestrator Updates
 - ✅ Task 12: Real-Time API Endpoints
 
 **Tasks 13-14: Conversational UI**
+
 - ✅ Task 13: Conversational UI (audio queue, visual feedback)
 - ✅ Task 14: Glowing Orb (AI presence visual)
 
 ### Phase 1D: Job Description Personalization (PLANNED)
+
 - ⏸️ Task 14A: Job Introduction Generator (partially complete)
 - Introduction sequence generation
 - JD parsing and extraction
@@ -468,12 +516,14 @@ Plays sequentially with visual feedback.
 ### Phase 2: Advanced Features (PLANNED)
 
 **Avatar & Emotions:**
+
 - Full avatar with facial animations
 - Emotion detection from voice tone
 - Lip-sync with TTS
 - Multiple avatar styles
 
 **Analytics & Insights:**
+
 - Performance metrics dashboard
 - Answer quality scoring
 - Strengths/weaknesses analysis
@@ -481,11 +531,13 @@ Plays sequentially with visual feedback.
 - Comparison with industry benchmarks
 
 **Multi-Interviewer Panel:**
+
 - Simulate panel interviews
 - Different interviewer personalities
 - Role-based questioning (technical lead, HR, manager)
 
 **Industry-Specific Modes:**
+
 - Tech (FAANG-style)
 - Finance (case interviews)
 - Consulting (framework-based)
@@ -494,16 +546,19 @@ Plays sequentially with visual feedback.
 ### Phase 3: Enterprise Features (PLANNED)
 
 **Company Integration:**
+
 - Custom question banks per company
 - Company-specific scoring criteria
 - White-label branding
 
 **Candidate Screening:**
+
 - Automated initial screening
 - Scoring and ranking
 - Integration with ATS systems
 
 **Team Collaboration:**
+
 - Shared interview sessions
 - Collaborative evaluation
 - Interview scheduling
@@ -511,16 +566,19 @@ Plays sequentially with visual feedback.
 ### Phase 4: Platform Expansion (PLANNED)
 
 **Mobile Apps:**
+
 - iOS and Android native apps
 - Offline practice mode
 - Push notifications for daily practice
 
 **Integrations:**
+
 - LinkedIn profile import
 - Calendar integration
 - Job board connections
 
 **Monetization:**
+
 - Free tier (5 interviews/month)
 - Pro tier ($9.99/month)
 - Enterprise (custom pricing)
@@ -559,31 +617,37 @@ Plays sequentially with visual feedback.
 ### When Working on This Project
 
 **1. Always Read This File First**
+
 - Understand current state
 - Check what's complete vs planned
 - Review architecture before coding
 
 **2. Service Layer Pattern**
+
 - New features → new service in `backend/services/`
 - Keep orchestrator clean (coordination only)
 - Services should be testable in isolation
 
 **3. Prompts are Key**
+
 - LLM quality depends on prompt quality
 - Always use prompt templates from `backend/prompts/`
 - Test prompts extensively before deployment
 
 **4. Audio Caching is Critical**
+
 - Every TTS call costs money
 - Always check cache before generating
 - Use descriptive cache keys
 
 **5. Frontend State Management**
+
 - Audio queue must be sequential
 - Never play multiple audio clips simultaneously
 - Visual feedback synced with audio state
 
 **6. Testing is Non-Negotiable**
+
 - Write tests for new services
 - Update integration tests
 - Manual testing checklist in testing guide
@@ -591,12 +655,14 @@ Plays sequentially with visual feedback.
 ### Code Style
 
 **Backend:**
+
 - Type hints everywhere
 - Pydantic models for validation
 - Async/await for I/O operations
 - Docstrings for all public methods
 
 **Frontend:**
+
 - Functional components + hooks
 - Tailwind for styling (no custom CSS unless necessary)
 - Descriptive variable names
@@ -607,6 +673,7 @@ Plays sequentially with visual feedback.
 ## Deployment
 
 ### Current Status
+
 - **Backend:** Not deployed yet
 - **Frontend:** Not deployed yet
 - **Database:** Supabase (hosted PostgreSQL)
@@ -614,6 +681,7 @@ Plays sequentially with visual feedback.
 ### Deployment Plan (When Ready)
 
 **Backend:**
+
 - Platform: Render / Railway / Fly.io
 - Requirements: Python 3.11+, PostgreSQL access
 - Environment: Production `.env` with all keys
@@ -621,7 +689,8 @@ Plays sequentially with visual feedback.
 - Start: `uvicorn api:app --host 0.0.0.0 --port $PORT`
 
 **Frontend:**
-- Platform: Vercel / Netlify
+
+- Platform: Vercel / vite react
 - Build: `npm run build`
 - Environment: `VITE_API_URL` pointing to backend
 
@@ -652,16 +721,15 @@ Plays sequentially with visual feedback.
 
 ## Contact & Links
 
-**Developer:** [Your Name]  
-**Email:** [your-email@example.com]  
-**LinkedIn:** [Your LinkedIn]  
-**GitHub:** https://github.com/yourusername/intervue-labs  
+**Developer:** Abhinay  
+**LinkedIn:** https://www.linkedin.com/in/abhinaylingala  
+**GitHub:** https://github.com/codexsys-7
 
 ---
 
 ## License
 
-Copyright © 2025 [Your Name]. All Rights Reserved.
+Copyright © 2025 Abhinay. All Rights Reserved.
 
 See LICENSE file for details.
 
@@ -674,6 +742,7 @@ See LICENSE file for details.
 ---
 
 ## Quick Start for New Developers
+
 ```bash
 # Backend
 cd backend
