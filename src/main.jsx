@@ -13,6 +13,8 @@ import ResumeAnalysis from "./Pages/ResumeAnalysis";
 import Interview from "./Pages/Interview";
 import InterviewArena from "./Pages/Interview_arena";
 import Feedback from "./Pages/Feedback";
+import PastInterviews from "./Pages/PastInterviews";
+import QuickInterview from "./Pages/QuickInterview";
 import Login from "./Pages/Login";
 import Signup from "./Pages/Signup";
 
@@ -55,6 +57,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <Route path="/interview" element={<Interview />} />
           <Route path="/interview/arena" element={<InterviewArena />} />
           <Route path="/feedback" element={<Feedback />} />
+          <Route path="/past-interviews" element={<PastInterviews />} />
+          <Route path="/quick-interview" element={<QuickInterview />} />
         </Route>
 
         {/* Catch-all */}
