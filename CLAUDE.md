@@ -6,7 +6,7 @@ AI-powered interview simulator that conducts intelligent, conversational intervi
 
 **Goal:** Portfolio project demonstrating advanced AI/LLM orchestration, conversational systems, and real-time audio processing for recruiters and job seekers.
 
-**Status:** Phase 1C COMPLETE (Tasks 1-13 + Glowing Orb). Production-ready conversational interview system with voice, memory, and visual intelligence.
+**Status:** Phase 1C COMPLETE. Currently: Minor Bug Fixes before Phase 1D. Production-ready conversational interview system with voice, memory, and visual intelligence.
 
 ---
 
@@ -455,7 +455,13 @@ Plays sequentially with visual feedback.
 - ✅ Task 13: Conversational UI (audio queue, visual feedback)
 - ✅ Task 14: Glowing Orb (AI presence visual)
 
-### Phase 1D: Job Description Personalization (PLANNED)
+### Phase 1D (Pre-work): Minor Bug Fixes (IN PROGRESS)
+- 🔧 Identify and fix bugs discovered after Phase 1C
+- Stability improvements across backend services
+- Frontend polish and edge case handling
+- Ensure clean baseline before Phase 1D feature work
+
+### Phase 1D: Job Description Personalization (NEXT)
 - ⏸️ Task 14A: Job Introduction Generator (partially complete)
 - Introduction sequence generation
 - JD parsing and extraction
@@ -667,9 +673,9 @@ See LICENSE file for details.
 
 ---
 
-**Last Updated:** March 5, 2026  
-**Current Version:** v1.0.0 (Phase 1C Complete)  
-**Next Milestone:** Phase 2 (Advanced Features)
+**Last Updated:** March 18, 2026
+**Current Version:** v1.0.0 (Phase 1C Complete)
+**Next Milestone:** Minor Bug Fixes → Phase 1D (Job Description Personalization)
 
 ---
 

@@ -3,7 +3,11 @@
     "allow": [
       "Bash(python -m py_compile:*)",
       "Bash(python:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(test:*)",
+      "Bash(ls Interview:*)",
+      "Bash(cd:*)",
+      "Bash(cd D:\\\\AI Interview Simulator\\\\ai-interview:*)"
     ]
   }
 }
