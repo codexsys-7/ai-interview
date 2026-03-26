@@ -1119,12 +1119,22 @@ class InterviewOrchestrator:
                 generate_audio
             )
 
+            # If proceeding to next question, strip the follow-up probe from the response.
+            # This prevents the frontend from seeing contradictory signals
+            # (needs_follow_up=True + should_proceed=True at the same time).
+            if should_proceed and ai_response.get("follow_up_probe"):
+                ai_response["follow_up_probe"] = None
+                logger.info("Cleared follow_up_probe — will proceed to next question")
+
             # Step 4: Decide on flow and generate next question if needed
             logger.info("Step 4: Determining flow and next question...")
             next_question = None
+            # needs_follow_up is only True when we are NOT proceeding AND a probe is present.
+            # These two flags must be mutually exclusive.
+            needs_follow_up = (ai_response.get("follow_up_probe") is not None) and (not should_proceed)
             flow_control = {
                 "should_proceed_to_next": should_proceed,
-                "needs_follow_up": realtime_response.get("follow_up_probe") is not None,
+                "needs_follow_up": needs_follow_up,
                 "quality_sufficient": overall_quality in ["excellent", "good"],
                 "conversation_stage": conversation_stage
             }

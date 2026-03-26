@@ -131,12 +131,15 @@ export default function InterviewPage() {
       })
 
       // 3. Save session info and navigate
+      // Strip `icon` from the interviewer — Lucide components carry Symbol(react.forward_ref)
+      // which can't be cloned by history.pushState and causes a "could not be cloned" error.
+      const { icon: _icon, ...safeInterviewer } = selectedInterviewer ?? {}
       const sessionData = {
         sessionId,
         role: role.trim(),
         difficulty,
         totalQuestions,
-        interviewer: selectedInterviewer,
+        interviewer: safeInterviewer,
         firstQuestion: startResp.first_question,
         jobDescription: selectedType === "job-description" ? jobDescription : null,
         answeredQuestions: [],

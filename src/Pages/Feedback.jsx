@@ -89,10 +89,21 @@ export default function FeedbackPage() {
 
     const { role, difficulty, answeredQuestions } = stored
 
+    // Filter out skipped/empty answers — they score 0 and pollute the feedback
+    const scorableAnswers = answeredQuestions.filter(
+      (q) => q.userAnswer && !q.userAnswer.startsWith("[No response")
+    )
+
+    if (scorableAnswers.length === 0) {
+      setLoadError("No answered questions to score. Please complete at least one answer before viewing feedback.")
+      setIsLoading(false)
+      return
+    }
+
     apiScoreInterview({
       role: role || "Software Engineer",
       difficulty: difficulty || "medium",
-      answers: answeredQuestions.map((q) => ({
+      answers: scorableAnswers.map((q) => ({
         id: q.id,
         prompt: q.prompt,
         interviewer: q.interviewer || "AI Interviewer",

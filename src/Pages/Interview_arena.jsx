@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
-import { RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { apiTranscribe, apiSubmitAnswerRealtime, apiSubmitFollowup } from "@/api/client"
@@ -113,6 +112,11 @@ export default function InterviewArenaPage() {
   const [currentQuestion, setCurrentQuestion] = useState(null)
   const [questionNumber, setQuestionNumber] = useState(1)
   const [totalQuestions, setTotalQuestions] = useState(10)
+
+  // Audio unlock: browsers block autoplay on programmatic navigation (no user gesture).
+  // We show a "Ready?" overlay; clicking it gives us a gesture so audio.play() succeeds.
+  const [readyToStart, setReadyToStart] = useState(false)
+  const pendingFirstAudioRef = useRef(null) // stores { url } until user clicks Ready
 
   // ── UI state ───────────────────────────────────────────────────────────────
   const [isAISpeaking, setIsAISpeaking] = useState(false)
@@ -315,18 +319,26 @@ export default function InterviewArenaPage() {
       setQuestionNumber(first.question.id || 1)
       setDisplayedText(first.question.text || "")
 
-      if (first.question.audio_url) {
-        playAudioQueue([{ url: first.question.audio_url, label: "question" }])
-      } else {
-        setStatusText("Listening...")
-        // No audio → start listening immediately
-        setTimeout(() => startListeningModeRef.current?.(), 500)
-      }
+      // Store first audio URL — play it only after user clicks "Ready"
+      // (browsers block autoplay without a user gesture on the current page)
+      pendingFirstAudioRef.current = first.question.audio_url || null
     } else {
       setDisplayedText("Tell me about yourself.")
-      setTimeout(() => startListeningModeRef.current?.(), 500)
+      pendingFirstAudioRef.current = null
     }
+    // Show the Ready overlay — audio fires on click, not here
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Handle "Ready" click — unlocks audio and starts the interview ───────────
+  const handleReady = useCallback(() => {
+    setReadyToStart(true)
+    if (pendingFirstAudioRef.current) {
+      playAudioQueue([{ url: pendingFirstAudioRef.current, label: "question" }])
+    } else {
+      // No audio generated — go straight to listening
+      setTimeout(() => startListeningModeRef.current?.(), 300)
+    }
+  }, [playAudioQueue])
 
   // ── Core: start listening mode ─────────────────────────────────────────────
   const startListeningMode = useCallback(async () => {
@@ -417,11 +429,15 @@ export default function InterviewArenaPage() {
     try {
       const isFollowUp = waitingForFollowUpRef.current
 
+      // Ensure questionText is never empty — an empty string causes a 422
+      const questionText =
+        (currentQuestion?.text || displayedText || "").trim() || "General interview question"
+
       const resp = isFollowUp
         ? await apiSubmitFollowup({
             sessionId: session.sessionId,
             originalQuestionId: currentQuestion?.id || questionNumber,
-            originalQuestionText: currentQuestion?.text || displayedText,
+            originalQuestionText: questionText,
             originalQuestionIntent: currentQuestion?.intent || "behavioral",
             followUpAnswer: transcript,
             role: session.role,
@@ -432,7 +448,7 @@ export default function InterviewArenaPage() {
         : await apiSubmitAnswerRealtime({
             sessionId: session.sessionId,
             questionId: currentQuestion?.id || questionNumber,
-            questionText: currentQuestion?.text || displayedText,
+            questionText,
             questionIntent: currentQuestion?.intent || "behavioral",
             role: session.role,
             userAnswer: transcript,
@@ -493,12 +509,16 @@ export default function InterviewArenaPage() {
         if (nextQuestion?.question) {
           const nq = nextQuestion.question
 
-          const qid = nq.id ?? nq.text ?? `q${questionNumber + 1}`
+          // Use question TEXT as primary dedup key — same question can reappear
+          // with a different slot number (id=3,4,5...) and ID-only dedup misses it.
+          // Fall back to id if text is missing.
+          const qid = (nq.text || "").trim() || nq.id || `q${questionNumber + 1}`
           if (usedQuestionIdsRef.current.has(qid)) {
             handleEndInterviewRef.current?.()
             return
           }
           usedQuestionIdsRef.current.add(qid)
+          if (nq.id) usedQuestionIdsRef.current.add(nq.id) // also guard by numeric id
 
           setCurrentQuestion(nq)
           setQuestionNumber(nq.id || questionNumber + 1)
@@ -750,12 +770,14 @@ export default function InterviewArenaPage() {
 
       if (nextQuestion?.question) {
         const nq = nextQuestion.question
-        const qid = nq.id ?? nq.text ?? `q${questionNumber + 1}`
+        // Text-first dedup — same as autoSubmitRecording
+        const qid = (nq.text || "").trim() || nq.id || `q${questionNumber + 1}`
         if (usedQuestionIdsRef.current.has(qid)) {
           handleEndInterviewRef.current?.()
           return
         }
         usedQuestionIdsRef.current.add(qid)
+        if (nq.id) usedQuestionIdsRef.current.add(nq.id)
 
         setCurrentQuestion(nq)
         setQuestionNumber(nq.id || questionNumber + 1)
@@ -828,6 +850,41 @@ export default function InterviewArenaPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
+
+      {/* ── Audio-unlock overlay — shown until user clicks Ready ── */}
+      {!readyToStart && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-6 text-center px-8 max-w-sm">
+            {/* Orb preview */}
+            <div className="relative w-24 h-24">
+              <div className="absolute inset-0 rounded-full bg-cyan-400/20 blur-2xl" />
+              <div className="relative w-24 h-24 rounded-full bg-gradient-to-br from-cyan-400/80 to-teal-600 shadow-[0_0_40px_rgba(34,211,238,0.4)]" />
+            </div>
+
+            <div>
+              <h2 className="text-2xl font-bold text-foreground mb-2">Ready to begin?</h2>
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                Your interviewer will ask you questions out loud.<br />
+                Answer naturally — recording starts automatically.
+              </p>
+            </div>
+
+            {displayedText && (
+              <div className="w-full rounded-xl bg-card border border-border px-4 py-3 text-left">
+                <p className="text-xs text-muted-foreground mb-1">First question:</p>
+                <p className="text-sm text-foreground italic">"{displayedText}"</p>
+              </div>
+            )}
+
+            <button
+              onClick={handleReady}
+              className="w-full h-14 rounded-2xl bg-primary text-primary-foreground font-semibold text-base hover:bg-primary/90 transition-colors shadow-lg shadow-primary/30"
+            >
+              Start Interview →
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Top Bar */}
       <div className="flex-shrink-0 bg-card border-b border-border px-6 py-4">
@@ -1029,16 +1086,8 @@ export default function InterviewArenaPage() {
         {/* Control bar */}
         <div className="flex items-center justify-between">
 
-          {/* Left: Repeat */}
-          <Button
-            onClick={handleRepeatQuestionAudio}
-            disabled={isAISpeaking || isProcessing || !currentQuestion?.audio_url}
-            variant="outline"
-            className="rounded-lg border-border bg-transparent text-foreground hover:bg-secondary h-11 px-5 gap-2 disabled:opacity-40"
-          >
-            <RotateCcw className="w-4 h-4" />
-            Repeat
-          </Button>
+          {/* Left: spacer (Repeat button removed — voice "want a repeat?" handles it) */}
+          <div className="w-28" />
 
           {/* Center: Listen status widget */}
           <div className="flex items-center gap-4">
@@ -1086,7 +1135,7 @@ export default function InterviewArenaPage() {
                   </span>
                   <span className="text-muted-foreground text-xs">
                     {listenPhase === "repeat_countdown"
-                      ? "Say "Yes" or "No""
+                      ? 'Say "Yes" or "No"'
                       : "Start speaking whenever you're ready"}
                   </span>
                 </div>
