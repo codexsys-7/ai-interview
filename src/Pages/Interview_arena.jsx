@@ -134,10 +134,10 @@ export default function InterviewArenaPage() {
   // ── Stats ──────────────────────────────────────────────────────────────────
   const [stats, setStats] = useState({ topics: 0, connections: 0, patterns: 0 })
 
-  // ── Audio queue state ──────────────────────────────────────────────────────
-  const [audioQueue, setAudioQueue] = useState([])
-  const [currentAudioIndex, setCurrentAudioIndex] = useState(0)
-  const [isPlayingQueue, setIsPlayingQueue] = useState(false)
+  // ── Audio playback — imperative ref-based (no state machine) ──────────────
+  // activePlayIdRef: incremented each time a new queue starts.
+  // Each play-loop captures its own id; if id changes it knows it was cancelled.
+  const activePlayIdRef = useRef(0)
 
   // ── Listen-mode state ──────────────────────────────────────────────────────
   // Phases:
@@ -176,43 +176,56 @@ export default function InterviewArenaPage() {
     listeningStreamRef.current = null
   }, [])
 
-  // ── Play audio queue ───────────────────────────────────────────────────────
+  // ── Play audio queue — fully imperative, no React state sequencing ─────────
+  // Why: the old useEffect approach had a bug where React's cleanup function
+  // `return () => { audio.pause() }` fired between renders and cut audio short.
+  // This version plays clips directly via a recursive callback — no state involved.
   const playAudioQueue = useCallback((queue) => {
+    // Cancel any previous queue by bumping the play-id
+    const myId = ++activePlayIdRef.current
+
     // Hard-stop whatever is currently playing
     if (audioRef.current) {
+      audioRef.current.onended = null
+      audioRef.current.onerror = null
       audioRef.current.pause()
-      audioRef.current.src = ""
+      audioRef.current = null
     }
+
     if (!queue || queue.length === 0) {
       setIsAISpeaking(false)
-      setStatusText("Recording ready")
-      return
-    }
-    setAudioQueue(queue)
-    setCurrentAudioIndex(0)
-    setIsPlayingQueue(true)
-    setIsAISpeaking(true)
-    setPhase("idle") // listening starts fresh after AI finishes
-  }, [setPhase])
-
-  // Audio queue useEffect — sequential playback
-  useEffect(() => {
-    if (!isPlayingQueue || audioQueue.length === 0) return
-    if (currentAudioIndex >= audioQueue.length) {
-      setIsPlayingQueue(false)
-      setIsAISpeaking(false)
-      // AI finished speaking → start auto-listening
+      setPhase("idle")
       startListeningModeRef.current?.()
       return
     }
-    const item = audioQueue[currentAudioIndex]
-    const audio = new Audio(item.url)
-    audioRef.current = audio
-    audio.onended = () => setCurrentAudioIndex((prev) => prev + 1)
-    audio.onerror = () => setCurrentAudioIndex((prev) => prev + 1)
-    audio.play().catch(() => setCurrentAudioIndex((prev) => prev + 1))
-    return () => { audio.pause() }
-  }, [isPlayingQueue, currentAudioIndex, audioQueue])
+
+    setIsAISpeaking(true)
+    setPhase("idle")
+
+    let index = 0
+
+    const playNext = () => {
+      // If a newer queue has started, stop this one
+      if (activePlayIdRef.current !== myId) return
+
+      if (index >= queue.length) {
+        // All clips finished — start listening
+        setIsAISpeaking(false)
+        startListeningModeRef.current?.()
+        return
+      }
+
+      const item = queue[index++]
+      const audio = new Audio(item.url)
+      audioRef.current = audio
+
+      audio.onended = playNext
+      audio.onerror = playNext   // skip broken / missing clips
+      audio.play().catch(playNext) // skip if browser rejects (e.g. autoplay)
+    }
+
+    playNext()
+  }, [setPhase])
 
   // ── Volume monitoring (Web Audio API) ─────────────────────────────────────
   const startVolumeMonitor = useCallback(() => {
@@ -821,7 +834,14 @@ export default function InterviewArenaPage() {
   const handleEndInterview = useCallback(() => {
     clearAllTimers()
     window.speechSynthesis?.cancel()
-    audioRef.current?.pause()
+    // Cancel any running audio queue
+    activePlayIdRef.current++
+    if (audioRef.current) {
+      audioRef.current.onended = null
+      audioRef.current.onerror = null
+      audioRef.current.pause()
+      audioRef.current = null
+    }
     stopListeningStream()
     streamRef.current?.getTracks().forEach((t) => t.stop())
     if (volumeFrameRef.current) cancelAnimationFrame(volumeFrameRef.current)
