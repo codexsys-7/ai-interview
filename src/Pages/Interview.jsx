@@ -128,6 +128,7 @@ export default function InterviewPage() {
         difficulty,
         totalQuestions,
         generateAudio: true,
+        voice: selectedInterviewer.voice || "alloy",
       })
 
       // 3. Save session info and navigate

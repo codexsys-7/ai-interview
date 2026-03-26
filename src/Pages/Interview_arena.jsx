@@ -43,6 +43,12 @@ const YES_REGEX =
 const NO_REGEX =
   /\b(no|nope|never ?mind|skip|next|proceed|move on|that.?s ok|that.?s fine|pass|continue|i.?m good|carry on)\b/i
 
+// Short meta-phrases that mean "please repeat the question" — NOT an interview answer.
+// Word count guard (< 15 words) prevents accidentally catching a real answer that
+// happens to contain one of these words in the middle of a longer response.
+const REPEAT_REQUEST_REGEX =
+  /\b(repeat|say that again|come again|could you|what did you say|what was the question|pardon|didn.?t catch|didn.?t hear|missed that|one more time|once more|could you please|please repeat|say it again)\b/i
+
 const MOTIVATIONAL_MESSAGES = [
   "You don't have to be nervous. Just take a breath — you've got this.",
   "Drink some water if you have some. It helps. Take your time.",
@@ -395,8 +401,15 @@ export default function InterviewArenaPage() {
     }
   }, [isMicOn, clearAllTimers, setPhase])
 
-  // Keep ref current so audio queue end handler can call it
-  useEffect(() => { startListeningModeRef.current = startListeningMode }, [startListeningMode])
+  // Keep ref current so audio queue end handler can call it.
+  // startListeningDefaultRef mirrors the base (non-second-chance) version so
+  // autoSubmitRecording can reset back to it after a repeat attempt without
+  // needing startListeningMode in its own closure deps.
+  const startListeningDefaultRef = useRef(null)
+  useEffect(() => {
+    startListeningModeRef.current = startListeningMode
+    startListeningDefaultRef.current = startListeningMode
+  }, [startListeningMode])
   useEffect(() => { waitingForFollowUpRef.current = waitingForFollowUp }, [waitingForFollowUp])
 
   // ── Core: auto-submit recording ────────────────────────────────────────────
@@ -436,6 +449,19 @@ export default function InterviewArenaPage() {
       return
     }
 
+    // ── Meta-request detection ───────────────────────────────────────────────
+    // If the user said something like "could you repeat the question?" instead
+    // of actually answering, route to the repeat handler instead of submitting.
+    // Word-count guard (< 15) avoids mis-routing real answers that happen to
+    // contain one of these phrases in the middle of a longer response.
+    const wordCount = transcript.trim().split(/\s+/).length
+    if (REPEAT_REQUEST_REGEX.test(transcript) && wordCount < 15) {
+      setIsProcessing(false)
+      setPhase("idle")
+      handleRepeatQuestionRef.current?.()
+      return
+    }
+
     setError("")
     setStatusText("Getting AI response...")
 
@@ -445,6 +471,8 @@ export default function InterviewArenaPage() {
       // Ensure questionText is never empty — an empty string causes a 422
       const questionText =
         (currentQuestion?.text || displayedText || "").trim() || "General interview question"
+
+      const interviewerVoice = session.interviewer?.voice || "alloy"
 
       const resp = isFollowUp
         ? await apiSubmitFollowup({
@@ -457,6 +485,7 @@ export default function InterviewArenaPage() {
             difficulty: session.difficulty,
             totalQuestions,
             generateAudio: true,
+            voice: interviewerVoice,
           })
         : await apiSubmitAnswerRealtime({
             sessionId: session.sessionId,
@@ -470,6 +499,7 @@ export default function InterviewArenaPage() {
             difficulty: session.difficulty,
             totalQuestions,
             generateAudio: true,
+            voice: interviewerVoice,
           })
 
       // Persist answered question for feedback page
@@ -494,8 +524,11 @@ export default function InterviewArenaPage() {
         patterns: metadata.patterns_detected || prev.patterns,
       }))
 
-      // Reset repeat state for next question
+      // Reset repeat state and restore base listening mode for next question.
+      // handleRepeatQuestion sets startListeningModeRef → startListeningModeWithSecondChance;
+      // we must restore it here so subsequent questions use the normal repeat-prompt flow.
       repeatAttemptRef.current = false
+      startListeningModeRef.current = startListeningDefaultRef.current
 
       // ── Flow control ────────────────────────────────────────────────────
       const flowControl = resp.flow_control || {}
@@ -649,18 +682,25 @@ export default function InterviewArenaPage() {
   // ── User said yes → replay question audio ─────────────────────────────────
   const handleRepeatQuestion = useCallback(() => {
     repeatAttemptRef.current = true
+    // Synchronously override the queue-end handler so that when the replayed
+    // audio finishes, auto-listen goes directly to startListeningModeWithSecondChance
+    // (second silence → motivational) instead of back to startListeningMode
+    // (which would restart the "want a repeat?" loop).
+    startListeningModeRef.current = startListeningModeWithSecondChance
     setPhase("idle")
 
     if (currentQuestion?.audio_url) {
-      // Play the question audio; when it ends, auto-listen will start again
-      // but this time repeatAttemptRef.current = true → second silence → motivating
       playAudioQueue([{ url: currentQuestion.audio_url, label: "question" }])
     } else {
       // No audio cached — go straight to second listening attempt
-      // Override the queue-end handler by calling startListeningMode directly
-      // and checking repeat attempt inside the timeout
       startListeningModeWithSecondChance()
     }
+  // NOTE: startListeningModeWithSecondChance is intentionally omitted from deps.
+  // It is declared AFTER this useCallback in the component, so including it in
+  // the dep array would cause a TDZ ReferenceError. The closure body is safe
+  // (lazy-evaluated). handleRepeatQuestionRef.current is always kept fresh so
+  // callers always invoke the latest version.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentQuestion, playAudioQueue, setPhase])
 
   const handleRepeatQuestionRef = useRef(handleRepeatQuestion)
@@ -704,15 +744,12 @@ export default function InterviewArenaPage() {
     }
   }, [isMicOn, clearAllTimers, setPhase])
 
-  // Override startListeningModeRef after repeat so the audio-queue end
-  // handler also uses the second-chance version
-  useEffect(() => {
-    if (repeatAttemptRef.current) {
-      startListeningModeRef.current = startListeningModeWithSecondChance
-    } else {
-      startListeningModeRef.current = startListeningMode
-    }
-  }, [startListeningMode, startListeningModeWithSecondChance])
+  // NOTE: startListeningModeRef is set synchronously in two places:
+  //   • handleRepeatQuestion  → switches to startListeningModeWithSecondChance
+  //   • autoSubmitRecording   → resets back to startListeningDefaultRef.current
+  // The useEffect that previously tried to do this here was broken because it
+  // read repeatAttemptRef.current (a ref) inside its condition — refs don't
+  // trigger effect re-runs, so the override never fired. Removed.
 
   // ── Second silence timeout → motivational message ──────────────────────────
   const handleSecondSilenceTimeout = useCallback(() => {

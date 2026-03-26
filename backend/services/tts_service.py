@@ -271,7 +271,8 @@ class TTSService:
         self,
         text: str,
         context_type: str,
-        conversation_stage: str = "mid"
+        conversation_stage: str = "mid",
+        voice_override: Optional[str] = None
     ) -> bytes:
         """
         Generate speech optimized for interview context.
@@ -280,11 +281,13 @@ class TTSService:
             text: Text to speak
             context_type: Type of content (question, acknowledgment, follow_up, etc.)
             conversation_stage: Interview stage (early, mid, late)
+            voice_override: If provided, overrides the per-context voice so all clips
+                            use the same interviewer voice (eliminates dual-voice bug)
 
         Returns:
             Contextually-optimized audio bytes
         """
-        logger.info(f"Generating interview TTS: context={context_type}, stage={conversation_stage}")
+        logger.info(f"Generating interview TTS: context={context_type}, stage={conversation_stage}, voice_override={voice_override}")
 
         # Get context configuration
         context_config = self.CONTEXT_MAPPING.get(
@@ -302,8 +305,9 @@ class TTSService:
         # Clamp to valid range
         final_speed = max(self.MIN_SPEED, min(self.MAX_SPEED, final_speed))
 
-        # Get voice and model
-        voice = context_config["voice"]
+        # Get voice and model — voice_override ensures all clips use the same
+        # interviewer voice instead of switching per context type
+        voice = voice_override or context_config["voice"]
         model = context_config.get("model", self.default_model)
 
         # Adjust text based on context

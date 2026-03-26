@@ -3036,6 +3036,7 @@ class SubmitAnswerRealtimeRequest(BaseModel):
     difficulty: str = Field(default="medium", description="Interview difficulty level")
     total_questions: int = Field(default=10, ge=1, le=50, description="Total planned questions")
     generate_audio: bool = Field(default=True, description="Whether to generate TTS audio")
+    voice: Optional[str] = Field(default=None, description="Interviewer voice override for consistent TTS voice")
 
 
 class AcknowledgmentModel(BaseModel):
@@ -3115,6 +3116,7 @@ class SubmitFollowUpRequest(BaseModel):
     difficulty: str = Field(default="medium", description="Difficulty level")
     total_questions: int = Field(default=10, description="Total questions")
     generate_audio: bool = Field(default=True, description="Generate TTS audio")
+    voice: Optional[str] = Field(default=None, description="Interviewer voice override for consistent TTS voice")
 
 
 class SubmitFollowUpResponse(BaseModel):
@@ -3138,6 +3140,7 @@ class StartInterviewWithAudioRequest(BaseModel):
     difficulty: str = Field(default="medium", description="Difficulty level")
     total_questions: int = Field(default=10, ge=1, le=50, description="Total questions")
     generate_audio: bool = Field(default=True, description="Generate TTS audio")
+    voice: Optional[str] = Field(default=None, description="Interviewer voice override for consistent TTS voice")
 
 
 class StartInterviewWithAudioResponse(BaseModel):
@@ -3263,7 +3266,8 @@ async def submit_answer_realtime(request: SubmitAnswerRealtimeRequest):
             role=request.role,
             difficulty=difficulty,
             total_questions=request.total_questions,
-            generate_audio=request.generate_audio
+            generate_audio=request.generate_audio,
+            voice=request.voice
         )
 
         # Build response models
@@ -3371,7 +3375,8 @@ async def submit_followup(request: SubmitFollowUpRequest):
             role=request.role,
             difficulty=difficulty,
             total_questions=request.total_questions,
-            generate_audio=request.generate_audio
+            generate_audio=request.generate_audio,
+            voice=request.voice
         )
 
         # Build response models
@@ -3480,7 +3485,8 @@ async def start_interview_with_audio(request: StartInterviewWithAudioRequest):
             role=request.role,
             difficulty=difficulty,
             total_questions=request.total_questions,
-            generate_audio=request.generate_audio
+            generate_audio=request.generate_audio,
+            voice=request.voice
         )
 
         # Build response

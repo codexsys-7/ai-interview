@@ -1041,7 +1041,8 @@ class InterviewOrchestrator:
         role: str,
         difficulty: str,
         total_questions: int = 10,
-        generate_audio: bool = True
+        generate_audio: bool = True,
+        voice: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Process answer and generate immediate AI response with optional audio.
@@ -1056,6 +1057,7 @@ class InterviewOrchestrator:
             difficulty: Interview difficulty level
             total_questions: Total planned questions
             generate_audio: Whether to generate TTS audio for responses
+            voice: Interviewer voice override for consistent single voice
 
         Returns:
             Comprehensive response with ai_response, next_question, and flow_control
@@ -1116,7 +1118,8 @@ class InterviewOrchestrator:
             ai_response = await self._build_ai_response_with_audio(
                 realtime_response,
                 conversation_stage,
-                generate_audio
+                generate_audio,
+                voice
             )
 
             # If proceeding to next question, strip the follow-up probe from the response.
@@ -1150,7 +1153,8 @@ class InterviewOrchestrator:
                         role,
                         difficulty,
                         total_questions,
-                        generate_audio
+                        generate_audio,
+                        voice
                     )
 
                     # Add transition if proceeding to next question
@@ -1164,7 +1168,8 @@ class InterviewOrchestrator:
                             transition_text,
                             "transition",
                             conversation_stage,
-                            generate_audio
+                            generate_audio,
+                            voice
                         )
 
             # Build final response
@@ -1223,7 +1228,8 @@ class InterviewOrchestrator:
         role: str,
         difficulty: str,
         total_questions: int = 10,
-        generate_audio: bool = True
+        generate_audio: bool = True,
+        voice: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate next question with optional TTS audio.
@@ -1235,6 +1241,7 @@ class InterviewOrchestrator:
             difficulty: Difficulty level
             total_questions: Total questions planned
             generate_audio: Whether to generate TTS audio
+            voice: Interviewer voice override for consistent voice
 
         Returns:
             Question data with optional audio URLs
@@ -1267,7 +1274,8 @@ class InterviewOrchestrator:
                     audio_bytes = await self.tts_service.generate_for_interview_context(
                         question_text,
                         context_type="question",
-                        conversation_stage=conversation_stage
+                        conversation_stage=conversation_stage,
+                        voice_override=voice
                     )
                     audio_path = await self.tts_service.save_audio_file(
                         audio_bytes,
@@ -1289,7 +1297,8 @@ class InterviewOrchestrator:
                     comment_audio = await self.tts_service.generate_for_interview_context(
                         interviewer_comment,
                         context_type="acknowledgment",
-                        conversation_stage=conversation_stage
+                        conversation_stage=conversation_stage,
+                        voice_override=voice
                     )
                     comment_path = await self.tts_service.save_audio_file(
                         comment_audio,
@@ -1319,7 +1328,8 @@ class InterviewOrchestrator:
         self,
         realtime_response: Dict[str, Any],
         conversation_stage: str,
-        generate_audio: bool
+        generate_audio: bool,
+        voice: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Build AI response structure with optional audio URLs.
@@ -1328,6 +1338,7 @@ class InterviewOrchestrator:
             realtime_response: Response from RealtimeResponseGenerator
             conversation_stage: Current interview stage
             generate_audio: Whether to generate audio
+            voice: Interviewer voice override for consistent voice across all clips
 
         Returns:
             Structured AI response with acknowledgment, probe, and transition
@@ -1345,7 +1356,8 @@ class InterviewOrchestrator:
                 ack_data.get("text"),
                 "acknowledgment",
                 conversation_stage,
-                generate_audio
+                generate_audio,
+                voice
             )
             ai_response["acknowledgment"]["should_speak"] = ack_data.get("should_speak", True)
             ai_response["acknowledgment"]["tone"] = ack_data.get("tone", "neutral")
@@ -1357,7 +1369,8 @@ class InterviewOrchestrator:
                 probe_data.get("text"),
                 "follow_up",
                 conversation_stage,
-                generate_audio
+                generate_audio,
+                voice
             )
             ai_response["follow_up_probe"]["probe_type"] = probe_data.get("probe_type", "specific")
             ai_response["follow_up_probe"]["missing_element"] = probe_data.get("missing_element")
@@ -1369,7 +1382,8 @@ class InterviewOrchestrator:
         text: str,
         context_type: str,
         conversation_stage: str,
-        generate_audio: bool
+        generate_audio: bool,
+        voice: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate audio for a piece of text and return structured response.
@@ -1379,6 +1393,7 @@ class InterviewOrchestrator:
             context_type: Type of content (question, acknowledgment, etc.)
             conversation_stage: Interview stage
             generate_audio: Whether to actually generate audio
+            voice: Interviewer voice override (keeps all clips same voice)
 
         Returns:
             Dict with text and optional audio_url
@@ -1398,7 +1413,8 @@ class InterviewOrchestrator:
             audio_bytes = await self.tts_service.generate_for_interview_context(
                 text,
                 context_type=context_type,
-                conversation_stage=conversation_stage
+                conversation_stage=conversation_stage,
+                voice_override=voice
             )
 
             # Generate unique filename
@@ -1481,7 +1497,8 @@ class InterviewOrchestrator:
         role: str,
         difficulty: str,
         total_questions: int = 10,
-        generate_audio: bool = True
+        generate_audio: bool = True,
+        voice: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Handle answer to follow-up probe.
@@ -1499,6 +1516,7 @@ class InterviewOrchestrator:
             difficulty: Difficulty level
             total_questions: Total questions
             generate_audio: Whether to generate audio
+            voice: Interviewer voice override for consistent single voice
 
         Returns:
             Response similar to process_answer_with_realtime_response
@@ -1549,7 +1567,8 @@ class InterviewOrchestrator:
                 ack_text,
                 "acknowledgment",
                 conversation_stage,
-                generate_audio
+                generate_audio,
+                voice
             )
             acknowledgment["should_speak"] = True
             acknowledgment["tone"] = "encouraging" if overall_quality in ["excellent", "good"] else "neutral"
@@ -1577,7 +1596,8 @@ class InterviewOrchestrator:
                         transition_text,
                         "transition",
                         conversation_stage,
-                        generate_audio
+                        generate_audio,
+                        voice
                     )
 
                     # Get next question
@@ -1587,7 +1607,8 @@ class InterviewOrchestrator:
                         role,
                         difficulty,
                         total_questions,
-                        generate_audio
+                        generate_audio,
+                        voice
                     )
 
                 # Clean up follow-up tracking
@@ -1604,7 +1625,8 @@ class InterviewOrchestrator:
                     probe_text,
                     "follow_up",
                     conversation_stage,
-                    generate_audio
+                    generate_audio,
+                    voice
                 )
                 ai_response["follow_up_probe"]["probe_type"] = "specific"
 
@@ -1650,7 +1672,8 @@ class InterviewOrchestrator:
                     role,
                     difficulty,
                     total_questions,
-                    generate_audio
+                    generate_audio,
+                    voice
                 ),
                 "flow_control": {
                     "should_proceed_to_next": True,

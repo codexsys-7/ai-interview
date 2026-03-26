@@ -79,7 +79,7 @@ export async function apiCreateSession({ role, difficulty, questionCount, interv
   })
 }
 
-export async function apiStartWithAudio({ sessionId, role, difficulty = "medium", totalQuestions = 10, generateAudio = true }) {
+export async function apiStartWithAudio({ sessionId, role, difficulty = "medium", totalQuestions = 10, generateAudio = true, voice = null }) {
   return apiFetch("/api/interview/start-with-audio", {
     method: "POST",
     body: JSON.stringify({
@@ -88,6 +88,7 @@ export async function apiStartWithAudio({ sessionId, role, difficulty = "medium"
       difficulty,
       total_questions: totalQuestions,
       generate_audio: generateAudio,
+      voice,
     }),
   })
 }
@@ -106,6 +107,7 @@ export async function apiSubmitAnswerRealtime({
   difficulty = "medium",
   totalQuestions = 10,
   generateAudio = true,
+  voice = null,
 }) {
   return apiFetch("/api/interview/submit-answer-realtime", {
     method: "POST",
@@ -121,6 +123,7 @@ export async function apiSubmitAnswerRealtime({
       difficulty,
       total_questions: totalQuestions,
       generate_audio: generateAudio,
+      voice,
     }),
   })
 }
@@ -135,6 +138,7 @@ export async function apiSubmitFollowup({
   difficulty = "medium",
   totalQuestions = 10,
   generateAudio = true,
+  voice = null,
 }) {
   return apiFetch("/api/interview/submit-followup", {
     method: "POST",
@@ -148,6 +152,7 @@ export async function apiSubmitFollowup({
       difficulty,
       total_questions: totalQuestions,
       generate_audio: generateAudio,
+      voice,
     }),
   })
 }
