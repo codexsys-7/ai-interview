@@ -1548,11 +1548,12 @@ class InterviewOrchestrator:
             quality_metrics = follow_up_analysis.get("quality_metrics", {})
             overall_quality = quality_metrics.get("overall_quality", "adequate")
 
-            # After one follow-up, always proceed to avoid blocking
-            should_proceed = (
-                current_count >= self.MAX_FOLLOW_UPS or
-                overall_quality in ["excellent", "good", "adequate"]
-            )
+            # Always proceed after receiving a follow-up response.
+            # We already asked for more detail once — never block the interview
+            # by waiting for a second follow-up (which would end the interview
+            # because _follow_up_counts resets on every request due to the
+            # orchestrator being stateless across HTTP calls).
+            should_proceed = True
 
             logger.info(f"Follow-up #{current_count + 1}: quality={overall_quality}, proceed={should_proceed}")
 

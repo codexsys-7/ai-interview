@@ -423,7 +423,7 @@ class RealtimeResponseGenerator:
 
         logger.info(f"Quality score: {quality_score:.0%}, vague: {is_vague}, missing: {missing_elements}")
 
-        # Early stage (Q1-3): More lenient, but still probe for truly weak answers
+        # Early stage (Q1-3): Lenient for adequate answers, but always probe weak ones
         if conversation_stage == "early":
             if quality_score >= self.GOOD_THRESHOLD:
                 return "acknowledge_only"
@@ -434,12 +434,11 @@ class RealtimeResponseGenerator:
                     return "probe_vague"
                 return "encourage"
             else:
-                # Weak early answers: probe gently
-                if is_vague:
-                    return "probe_vague"
-                elif missing_elements:
+                # Weak early answers: always probe — don't rely on is_vague/missing_elements
+                # because structural detection misses semantically poor answers
+                if missing_elements:
                     return "probe_missing"
-                return "encourage"
+                return "probe_vague"
 
         # Late stage (Q8+): Expect higher quality, probe less
         if conversation_stage == "late":
@@ -458,10 +457,7 @@ class RealtimeResponseGenerator:
 
         # Good answer (60-80%)
         if quality_score >= self.GOOD_THRESHOLD:
-            logger.info("Good answer - acknowledge, maybe gentle probe")
-            # Occasionally probe for even better answers
-            if missing_elements and len(missing_elements) <= 1:
-                return "acknowledge_only"  # Good enough, proceed
+            logger.info("Good answer - acknowledge only")
             return "acknowledge_only"
 
         # Adequate answer (40-60%)
@@ -473,14 +469,11 @@ class RealtimeResponseGenerator:
                 return "probe_vague"
             return "acknowledge_only"
 
-        # Weak answer (<40%)
-        logger.info("Weak answer - probe for specifics")
-        if is_vague:
-            return "probe_vague"
-        elif missing_elements:
+        # Weak answer (<40%): always probe — don't let is_vague=False slip through
+        logger.info("Weak answer - probing for specifics")
+        if missing_elements:
             return "probe_missing"
-        else:
-            return "encourage"
+        return "probe_vague"
 
     async def generate_acknowledgment_response(
         self,

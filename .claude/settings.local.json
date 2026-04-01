@@ -7,7 +7,8 @@
       "Bash(test:*)",
       "Bash(ls Interview:*)",
       "Bash(cd:*)",
-      "Bash(cd D:\\\\AI Interview Simulator\\\\ai-interview:*)"
+      "Bash(cd D:\\\\AI Interview Simulator\\\\ai-interview:*)",
+      "Bash(grep -v \"^fastapi_env$\")"
     ]
   }
 }
