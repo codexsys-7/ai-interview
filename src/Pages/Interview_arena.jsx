@@ -31,7 +31,17 @@ function buildAudioQueue(aiResponse, nextQuestion, isFollowUp = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
-const SPEECH_THRESHOLD = 18   // 0–255 FFT average; above this = voice detected
+// Voice Activity Detection (VAD) constants
+// Human speech sits mostly in the 80–3 000 Hz range.
+// With fftSize=256 and a typical 44.1 kHz sample rate,
+// each bin covers ~172 Hz, so bins 1–17 cover ~172–3 000 Hz.
+// We compute a weighted average of those mid-range bins instead of a flat
+// whole-spectrum average, which filters out low-frequency table/keyboard thuds
+// and high-frequency hiss that would otherwise trigger recording.
+const SPEECH_THRESHOLD = 22    // weighted mid-band energy above this = probable voice
+const SPEECH_CONFIRM_FRAMES = 6 // must be sustained for 6 consecutive frames (~100ms at 60fps)
+const VOICE_BIN_START = 1      // ~172 Hz
+const VOICE_BIN_END = 17       // ~3 000 Hz
 const SILENCE_AFTER_SPEECH_MS = 5000   // auto-submit after this many ms of silence
 const FIRST_COUNTDOWN_S = 20   // seconds before "want a repeat?"
 const REPEAT_LISTEN_S = 8    // seconds to listen for yes/no
@@ -107,6 +117,9 @@ export default function InterviewArenaPage() {
   const hasSpeechRef = useRef(false)
   const repeatAttemptRef = useRef(false)
   const waitingForFollowUpRef = useRef(false)
+  // Counts consecutive FFT frames above SPEECH_THRESHOLD — prevents noise spikes
+  // from being mistaken for speech. Reset to 0 whenever a frame is below threshold.
+  const consecutiveSpeechFramesRef = useRef(0)
 
   // Callback refs — always point at the latest version of the function
   const autoSubmitRef = useRef(null)
@@ -240,18 +253,34 @@ export default function InterviewArenaPage() {
 
       const data = new Uint8Array(analyserRef.current.frequencyBinCount)
       analyserRef.current.getByteFrequencyData(data)
-      const avg = Math.round(data.reduce((a, b) => a + b, 0) / data.length)
-      setAudioLevel(avg)
+      // Full-spectrum average for the visual level meter (all 128 bins)
+      const fullAvg = Math.round(data.reduce((a, b) => a + b, 0) / data.length)
+      setAudioLevel(fullAvg)
+      // Voice-band energy: only bins covering ~80–3000 Hz for speech detection.
+      // This rejects keyboard clicks (low-freq) and hiss/fan noise (high-freq).
+      const voiceBins = data.slice(VOICE_BIN_START, VOICE_BIN_END + 1)
+      const avg = Math.round(voiceBins.reduce((a, b) => a + b, 0) / voiceBins.length)
 
       const phase = listenPhaseRef.current
 
       // ── First listen window: countdown → speaking ──
-      if (phase === "countdown" && avg > SPEECH_THRESHOLD && !hasSpeechRef.current) {
-        hasSpeechRef.current = true
-        clearInterval(countdownIntervalRef.current)
-        listenPhaseRef.current = "speaking"
-        setListenPhase("speaking")
-        setStatusText("Recording your answer...")
+      // Require SPEECH_CONFIRM_FRAMES consecutive frames above threshold to avoid
+      // triggering on keyboard noise, background sounds, or brief spikes.
+      if (phase === "countdown" && !hasSpeechRef.current) {
+        if (avg > SPEECH_THRESHOLD) {
+          consecutiveSpeechFramesRef.current += 1
+          if (consecutiveSpeechFramesRef.current >= SPEECH_CONFIRM_FRAMES) {
+            hasSpeechRef.current = true
+            consecutiveSpeechFramesRef.current = 0
+            clearInterval(countdownIntervalRef.current)
+            listenPhaseRef.current = "speaking"
+            setListenPhase("speaking")
+            setStatusText("Recording your answer...")
+          }
+        } else {
+          // Reset on any sub-threshold frame — must be sustained speech
+          consecutiveSpeechFramesRef.current = 0
+        }
       }
 
       if (phase === "speaking" && avg > SPEECH_THRESHOLD) {
@@ -264,11 +293,19 @@ export default function InterviewArenaPage() {
       }
 
       // ── Repeat-listen window: repeat_countdown → repeat_speaking ──
-      if (phase === "repeat_countdown" && avg > SPEECH_THRESHOLD && !hasSpeechRef.current) {
-        hasSpeechRef.current = true
-        clearInterval(countdownIntervalRef.current)
-        listenPhaseRef.current = "repeat_speaking"
-        setListenPhase("repeat_speaking")
+      if (phase === "repeat_countdown" && !hasSpeechRef.current) {
+        if (avg > SPEECH_THRESHOLD) {
+          consecutiveSpeechFramesRef.current += 1
+          if (consecutiveSpeechFramesRef.current >= SPEECH_CONFIRM_FRAMES) {
+            hasSpeechRef.current = true
+            consecutiveSpeechFramesRef.current = 0
+            clearInterval(countdownIntervalRef.current)
+            listenPhaseRef.current = "repeat_speaking"
+            setListenPhase("repeat_speaking")
+          }
+        } else {
+          consecutiveSpeechFramesRef.current = 0
+        }
       }
 
       if (phase === "repeat_speaking" && avg > SPEECH_THRESHOLD) {
@@ -310,8 +347,12 @@ export default function InterviewArenaPage() {
     }
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+      if (videoRef.current) videoRef.current.srcObject = null
       if (volumeFrameRef.current) cancelAnimationFrame(volumeFrameRef.current)
       audioContextRef.current?.close()
+      audioContextRef.current = null
+      analyserRef.current = null
     }
   }, [startVolumeMonitor])
 
@@ -331,7 +372,9 @@ export default function InterviewArenaPage() {
 
     const first = data.firstQuestion
     if (first?.question) {
-      const firstId = first.question.id ?? first.question.text ?? "q1"
+      // Dedup by numeric question ID only — text-based dedup caused false endings
+      // because different questions can share similar wording (fallback bank wraps at 10).
+      const firstId = first.question.id ?? 1
       usedQuestionIdsRef.current.add(firstId)
 
       setCurrentQuestion(first.question)
@@ -354,10 +397,12 @@ export default function InterviewArenaPage() {
     if (pendingFirstAudioRef.current) {
       playAudioQueue([{ url: pendingFirstAudioRef.current, label: "question" }])
     } else {
-      // No audio generated — go straight to listening
-      setTimeout(() => startListeningModeRef.current?.(), 300)
+      // No TTS audio generated — speak the question via browser SpeechSynthesis
+      // so the candidate always hears something before auto-listen begins.
+      const text = displayedText || "Tell me about yourself."
+      speakText(text, () => startListeningModeRef.current?.())
     }
-  }, [playAudioQueue])
+  }, [playAudioQueue, displayedText])
 
   // ── Core: start listening mode ─────────────────────────────────────────────
   const startListeningMode = useCallback(async () => {
@@ -368,6 +413,7 @@ export default function InterviewArenaPage() {
 
     clearAllTimers()
     hasSpeechRef.current = false
+    consecutiveSpeechFramesRef.current = 0
     audioChunksRef.current = []
 
     try {
@@ -505,6 +551,26 @@ export default function InterviewArenaPage() {
       // Persist answered question for feedback page
       const stored = JSON.parse(localStorage.getItem("interviewSession") || "{}")
       const answeredQuestions = stored.answeredQuestions || []
+      const isFollowUpAnswer = waitingForFollowUpRef.current
+      const flowControl = resp?.flow_control || {}
+      const qMetrics = resp?.quality_metrics || {}
+      const wordCount = transcript.trim().split(/\s+/).length
+      // Derive a human-readable quality label from backend quality_metrics.
+      // overall_quality comes from realtime_response_generator analyse step.
+      // Word count guard catches one-liner answers that slip past structural checks.
+      const backendQuality = qMetrics.overall_quality || "adequate"
+      let qualityLabel
+      if (wordCount < 10) {
+        qualityLabel = "Weak One-Liner"
+      } else if (backendQuality === "excellent") {
+        qualityLabel = "Strong Response"
+      } else if (backendQuality === "good") {
+        qualityLabel = flowControl.needs_follow_up ? "Good — Needs Elaboration" : "Strong Response"
+      } else if (backendQuality === "adequate") {
+        qualityLabel = flowControl.needs_follow_up ? "Vague / Needs Elaboration" : "Adequate Response"
+      } else {
+        qualityLabel = flowControl.needs_follow_up ? "Missing Key Elements" : "Weak Response"
+      }
       answeredQuestions.push({
         id: currentQuestion?.id || questionNumber,
         prompt: currentQuestion?.text || displayedText,
@@ -512,6 +578,8 @@ export default function InterviewArenaPage() {
         type: currentQuestion?.type || "behavioral",
         userAnswer: transcript,
         idealAnswer: null,
+        isFollowUp: isFollowUpAnswer,
+        qualityLabel,
       })
       stored.answeredQuestions = answeredQuestions
       localStorage.setItem("interviewSession", JSON.stringify(stored))
@@ -555,19 +623,18 @@ export default function InterviewArenaPage() {
         if (nextQuestion?.question) {
           const nq = nextQuestion.question
 
-          // Use question TEXT as primary dedup key — same question can reappear
-          // with a different slot number (id=3,4,5...) and ID-only dedup misses it.
-          // Fall back to id if text is missing.
-          const qid = (nq.text || "").trim() || nq.id || `q${questionNumber + 1}`
+          // Dedup by numeric ID only. The backend sets id = current_question_number
+          // which is always monotonically increasing, so repeated text across
+          // different question slots will never cause a false interview end.
+          const qid = nq.id ?? (questionNumber + 1)
           if (usedQuestionIdsRef.current.has(qid)) {
             handleEndInterviewRef.current?.()
             return
           }
           usedQuestionIdsRef.current.add(qid)
-          if (nq.id) usedQuestionIdsRef.current.add(nq.id) // also guard by numeric id
 
           setCurrentQuestion(nq)
-          setQuestionNumber(nq.id || questionNumber + 1)
+          setQuestionNumber(qid)
           setDisplayedText(nq.text || "")
 
           const queue = buildAudioQueue(resp.ai_response, nextQuestion, false)
@@ -614,6 +681,7 @@ export default function InterviewArenaPage() {
   // ── Start listening for user's yes/no response ────────────────────────────
   const startRepeatListening = useCallback(async () => {
     hasSpeechRef.current = false
+    consecutiveSpeechFramesRef.current = 0
     audioChunksRef.current = []
 
     try {
@@ -682,6 +750,11 @@ export default function InterviewArenaPage() {
   // ── User said yes → replay question audio ─────────────────────────────────
   const handleRepeatQuestion = useCallback(() => {
     repeatAttemptRef.current = true
+    // Reset voice detection state so the second-chance listen window starts clean.
+    // Without this, stale frame counts from the yes/no listen phase can
+    // immediately flip phase to "speaking" before the user has said a word.
+    hasSpeechRef.current = false
+    consecutiveSpeechFramesRef.current = 0
     // Synchronously override the queue-end handler so that when the replayed
     // audio finishes, auto-listen goes directly to startListeningModeWithSecondChance
     // (second silence → motivational) instead of back to startListeningMode
@@ -712,6 +785,7 @@ export default function InterviewArenaPage() {
     if (!isMicOn) return
     clearAllTimers()
     hasSpeechRef.current = false
+    consecutiveSpeechFramesRef.current = 0
     audioChunksRef.current = []
 
     try {
@@ -799,6 +873,22 @@ export default function InterviewArenaPage() {
     startListeningModeRef.current = startListeningMode
 
     try {
+      // Record skipped question in session before calling backend
+      const storedSkip = JSON.parse(localStorage.getItem("interviewSession") || "{}")
+      const answeredSkip = storedSkip.answeredQuestions || []
+      answeredSkip.push({
+        id: currentQuestion?.id || questionNumber,
+        prompt: currentQuestion?.text || displayedText,
+        interviewer: "AI Interviewer",
+        type: currentQuestion?.type || "behavioral",
+        userAnswer: "[No response — candidate skipped]",
+        idealAnswer: null,
+        isFollowUp: false,
+        qualityLabel: "Silent Response",
+      })
+      storedSkip.answeredQuestions = answeredSkip
+      localStorage.setItem("interviewSession", JSON.stringify(storedSkip))
+
       const resp = await apiSubmitAnswerRealtime({
         sessionId: session.sessionId,
         questionId: currentQuestion?.id || questionNumber,
@@ -820,14 +910,12 @@ export default function InterviewArenaPage() {
 
       if (nextQuestion?.question) {
         const nq = nextQuestion.question
-        // Text-first dedup — same as autoSubmitRecording
-        const qid = (nq.text || "").trim() || nq.id || `q${questionNumber + 1}`
+        const qid = nq.id ?? (questionNumber + 1)
         if (usedQuestionIdsRef.current.has(qid)) {
           handleEndInterviewRef.current?.()
           return
         }
         usedQuestionIdsRef.current.add(qid)
-        if (nq.id) usedQuestionIdsRef.current.add(nq.id)
 
         setCurrentQuestion(nq)
         setQuestionNumber(nq.id || questionNumber + 1)
@@ -880,8 +968,16 @@ export default function InterviewArenaPage() {
       audioRef.current = null
     }
     stopListeningStream()
+    // Stop all camera + mic tracks so browser removes the recording indicator
     streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+    // Clear video element — removes the frozen frame and releases the camera
+    if (videoRef.current) videoRef.current.srcObject = null
+    // Stop volume monitoring and close Web Audio context
     if (volumeFrameRef.current) cancelAnimationFrame(volumeFrameRef.current)
+    audioContextRef.current?.close()
+    audioContextRef.current = null
+    analyserRef.current = null
     navigate("/feedback")
   }, [clearAllTimers, stopListeningStream])
 
@@ -1060,48 +1156,8 @@ export default function InterviewArenaPage() {
             />
           </div>
 
-          {/* Follow-up probe text */}
-          {waitingForFollowUp && followUpProbeText && (
-            <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 w-full max-w-md px-4">
-              <div className="rounded-xl bg-primary/10 border border-primary/30 px-4 py-3 text-sm text-primary text-center">
-                {followUpProbeText}
-              </div>
-            </div>
-          )}
-
-          {/* Repeat prompt banner */}
-          {(listenPhase === "repeat_prompt" || listenPhase === "repeat_countdown" || listenPhase === "repeat_speaking") && (
-            <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 w-full max-w-md px-4">
-              <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 px-4 py-3 text-sm text-amber-400 text-center">
-                {listenPhase === "repeat_prompt"
-                  ? "Checking in with you…"
-                  : listenPhase === "repeat_countdown" || listenPhase === "repeat_speaking"
-                    ? `Say "Yes" to repeat or "No" to continue (${countdownValue}s)`
-                    : ""}
-              </div>
-            </div>
-          )}
-
-          {/* Motivational message banner */}
-          {listenPhase === "motivating" && (
-            <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 w-full max-w-lg px-4">
-              <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 px-5 py-4 text-sm text-emerald-400 text-center leading-relaxed">
-                {statusText}
-              </div>
-            </div>
-          )}
-
-          {/* Skip countdown banner */}
-          {listenPhase === "second_countdown" && (
-            <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 w-full max-w-md px-4">
-              <div className="rounded-xl bg-secondary border border-border px-4 py-3 text-sm text-muted-foreground text-center">
-                Moving to the next question in {skipCountdownValue}s…
-              </div>
-            </div>
-          )}
-
-          {/* AI status text */}
-          <div className="absolute bottom-1/4 left-1/2 -translate-x-1/2">
+          {/* AI status text — sits just below the orb, always visible */}
+          <div className="absolute top-[58%] left-1/2 -translate-x-1/2 text-center">
             <span className="text-muted-foreground text-sm">
               {isAISpeaking
                 ? "AI is speaking…"
@@ -1111,6 +1167,40 @@ export default function InterviewArenaPage() {
                     ? "Listening…"
                     : ""}
             </span>
+          </div>
+
+          {/* Status banners — pinned to bottom of orb area, above the transcript bar */}
+          <div className="absolute bottom-5 left-0 right-0 px-6 space-y-2">
+
+            {/* Follow-up probe text */}
+            {waitingForFollowUp && followUpProbeText && (
+              <div className="rounded-xl bg-primary/10 border border-primary/30 px-4 py-3 text-sm text-primary text-center">
+                {followUpProbeText}
+              </div>
+            )}
+
+            {/* Repeat prompt banner */}
+            {(listenPhase === "repeat_prompt" || listenPhase === "repeat_countdown" || listenPhase === "repeat_speaking") && (
+              <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 px-4 py-3 text-sm text-amber-400 text-center">
+                {listenPhase === "repeat_prompt"
+                  ? "Checking in with you…"
+                  : `Say "Yes" to repeat or "No" to continue (${countdownValue}s)`}
+              </div>
+            )}
+
+            {/* Motivational message banner */}
+            {listenPhase === "motivating" && (
+              <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 px-5 py-4 text-sm text-emerald-400 text-center leading-relaxed">
+                {statusText}
+              </div>
+            )}
+
+            {/* Skip countdown banner */}
+            {listenPhase === "second_countdown" && (
+              <div className="rounded-xl bg-secondary border border-border px-4 py-3 text-sm text-muted-foreground text-center">
+                Moving to the next question in {skipCountdownValue}s…
+              </div>
+            )}
           </div>
         </div>
       </div>

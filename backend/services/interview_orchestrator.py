@@ -1104,7 +1104,8 @@ class InterviewOrchestrator:
                 session_id,
                 user_answer,
                 question_id,
-                question_intent
+                question_intent,
+                difficulty=difficulty
             )
 
             quality_metrics = realtime_response.get("quality_metrics", {})

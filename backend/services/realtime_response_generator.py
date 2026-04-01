@@ -112,7 +112,8 @@ class RealtimeResponseGenerator:
         answer: str,
         question_id: int,
         question_intent: str,
-        quality_metrics: Optional[Dict] = None
+        quality_metrics: Optional[Dict] = None,
+        difficulty: str = "medium"
     ) -> Dict[str, Any]:
         """
         Generate immediate response after user finishes answering.
@@ -156,7 +157,8 @@ class RealtimeResponseGenerator:
             response_action = await self.decide_response_action(
                 metrics,
                 conversation_stage,
-                question_id
+                question_id,
+                difficulty=difficulty
             )
             logger.info(f"Response action decided: {response_action}")
 
@@ -397,7 +399,8 @@ class RealtimeResponseGenerator:
         self,
         quality_metrics: Dict[str, Any],
         conversation_stage: str,
-        question_number: int
+        question_number: int,
+        difficulty: str = "medium"
     ) -> str:
         """
         Decide what type of response to give.
@@ -406,11 +409,12 @@ class RealtimeResponseGenerator:
             quality_metrics: Quality metrics from analyze_answer_quality
             conversation_stage: "early" | "mid" | "late"
             question_number: Current question number
+            difficulty: Interview difficulty level ("easy" | "medium" | "hard")
 
         Returns:
             Response action type string
         """
-        logger.info(f"Deciding response action: stage={conversation_stage}, Q#{question_number}")
+        logger.info(f"Deciding response action: stage={conversation_stage}, Q#{question_number}, difficulty={difficulty}")
 
         completeness = quality_metrics.get("completeness_score", 0.5)
         specificity = quality_metrics.get("specificity_score", 0.5)
@@ -422,6 +426,17 @@ class RealtimeResponseGenerator:
         quality_score = (completeness + specificity) / 2
 
         logger.info(f"Quality score: {quality_score:.0%}, vague: {is_vague}, missing: {missing_elements}")
+
+        # ── HARD MODE: always probe, no matter the answer quality ──────────────
+        # The goal is to go deeper on every answer — even excellent ones.
+        # This mirrors real senior/staff interviews where the interviewer always
+        # asks "why", "how did you measure that", or "what would you do differently".
+        if difficulty == "hard":
+            logger.info("Hard difficulty — always probing for deeper insight")
+            if missing_elements:
+                return "probe_missing"
+            # Even if nothing is structurally missing, push for depth/specifics
+            return "probe_vague"
 
         # Early stage (Q1-3): Lenient for adequate answers, but always probe weak ones
         if conversation_stage == "early":

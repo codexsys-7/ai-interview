@@ -74,6 +74,8 @@ export default function InterviewPage() {
   // Misc
   const [isStarting, setIsStarting] = useState(false)
   const [startError, setStartError] = useState("")
+  // True when the user already configured the session in ResumeAnalysis — lock Step 2
+  const [configLocked, setConfigLocked] = useState(false)
 
   // Pre-fill from interviewConfig saved on the resume analysis page
   useEffect(() => {
@@ -93,6 +95,11 @@ export default function InterviewPage() {
     if (config?.interviewer) {
       const match = INTERVIEWERS.find((i) => i.name === config.interviewer)
       if (match) setSelectedInterviewer(match)
+    }
+
+    // Lock Step 2 if a full config was saved (role + difficulty + interviewer all set)
+    if (config?.role && config?.difficulty && config?.interviewer) {
+      setConfigLocked(true)
     }
   }, [])
 
@@ -315,129 +322,170 @@ export default function InterviewPage() {
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
                 <ChevronDown className="w-3 h-3" />
                 Step 2 — Configure Your Session
+                {configLocked && (
+                  <span className="ml-2 px-2 py-0.5 rounded-full bg-primary/15 text-primary text-xs font-medium">
+                    Configured
+                  </span>
+                )}
               </div>
               <div className="flex-1 h-px bg-border" />
             </div>
 
-            {/* Role Selection */}
-            <GlassCard>
-              <div className="space-y-5">
-                <div>
-                  <Label className="text-lg font-semibold text-foreground">Target Role</Label>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Questions and evaluation will be tailored to this role
-                  </p>
+            {/* ── LOCKED: read-only summary from ResumeAnalysis ── */}
+            {configLocked ? (
+              <GlassCard className="border-primary/20 bg-primary/5">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-primary" />
+                    <p className="text-sm text-muted-foreground">
+                      Session configured on the Resume Analysis page. To change these, go back and re-upload your resume.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-4 pt-2">
+                    <div className="rounded-xl bg-background border border-border px-4 py-3 space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Role</p>
+                      <p className="font-semibold text-foreground">{role}</p>
+                    </div>
+                    <div className="rounded-xl bg-background border border-border px-4 py-3 space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Difficulty</p>
+                      <p className={cn(
+                        "font-semibold capitalize",
+                        difficulty === "easy" ? "text-green-400"
+                          : difficulty === "medium" ? "text-yellow-400"
+                          : "text-red-400"
+                      )}>{difficulty}</p>
+                    </div>
+                    <div className="rounded-xl bg-background border border-border px-4 py-3 space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Interviewer</p>
+                      <p className="font-semibold text-foreground">{selectedInterviewer?.name}</p>
+                      <p className="text-xs text-primary">{selectedInterviewer?.style}</p>
+                    </div>
+                  </div>
                 </div>
+              </GlassCard>
+            ) : (
+              <>
+                {/* Role Selection */}
+                <GlassCard>
+                  <div className="space-y-5">
+                    <div>
+                      <Label className="text-lg font-semibold text-foreground">Target Role</Label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Questions and evaluation will be tailored to this role
+                      </p>
+                    </div>
 
-                {/* Quick-pick chips */}
-                <div className="flex flex-wrap gap-2">
-                  {COMMON_ROLES.map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => setRole(r)}
-                      className={cn(
-                        "px-3 py-1.5 rounded-lg text-sm border transition-all duration-200",
-                        role === r
-                          ? "border-primary bg-primary/15 text-primary font-medium"
-                          : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                      )}
-                    >
-                      {r}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Free-text input */}
-                <Input
-                  placeholder="Or type a custom role..."
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                  className="bg-input border-border focus:border-primary rounded-xl h-11"
-                />
-              </div>
-            </GlassCard>
-
-            {/* Difficulty Picker */}
-            <GlassCard>
-              <div className="space-y-5">
-                <div>
-                  <Label className="text-lg font-semibold text-foreground">Difficulty Level</Label>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Sets the depth and complexity of follow-up questions
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  {DIFFICULTIES.map((d) => (
-                    <button
-                      key={d.value}
-                      onClick={() => setDifficulty(d.value)}
-                      className={cn(
-                        "rounded-xl border-2 p-4 text-left transition-all duration-200 space-y-1",
-                        difficulty === d.value
-                          ? d.activeBg
-                          : "border-border hover:border-primary/30"
-                      )}
-                    >
-                      <div className={cn("font-bold text-lg", d.color)}>{d.label}</div>
-                      <div className="text-xs text-muted-foreground leading-snug">{d.description}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </GlassCard>
-
-            {/* Interviewer Selection */}
-            <GlassCard>
-              <div className="space-y-5">
-                <div>
-                  <Label className="text-lg font-semibold text-foreground">Choose Your Interviewer</Label>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Each interviewer has a distinct style and voice
-                  </p>
-                </div>
-
-                <div className="grid md:grid-cols-3 gap-4">
-                  {INTERVIEWERS.map((interviewer) => {
-                    const Icon = interviewer.icon
-                    const isSelected = selectedInterviewer?.name === interviewer.name
-                    return (
-                      <button
-                        key={interviewer.name}
-                        onClick={() => setSelectedInterviewer(interviewer)}
-                        className={cn(
-                          "rounded-xl border-2 p-4 text-left transition-all duration-200 space-y-3",
-                          isSelected
-                            ? "border-primary bg-primary/10"
-                            : "border-border hover:border-primary/30"
-                        )}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className={cn(
-                            "w-10 h-10 rounded-lg flex items-center justify-center",
-                            isSelected ? "bg-primary/20" : "bg-muted"
-                          )}>
-                            <Icon className={cn("w-5 h-5", isSelected ? "text-primary" : "text-muted-foreground")} />
-                          </div>
-                          {isSelected && (
-                            <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                              <CheckCircle2 className="w-3 h-3 text-primary-foreground" />
-                            </div>
+                    {/* Quick-pick chips */}
+                    <div className="flex flex-wrap gap-2">
+                      {COMMON_ROLES.map((r) => (
+                        <button
+                          key={r}
+                          onClick={() => setRole(r)}
+                          className={cn(
+                            "px-3 py-1.5 rounded-lg text-sm border transition-all duration-200",
+                            role === r
+                              ? "border-primary bg-primary/15 text-primary font-medium"
+                              : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
                           )}
-                        </div>
-                        <div>
-                          <div className="font-semibold text-foreground">{interviewer.name}</div>
-                          <div className="text-xs text-primary font-medium">{interviewer.style}</div>
-                        </div>
-                        <p className="text-xs text-muted-foreground leading-snug">
-                          {interviewer.description}
-                        </p>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            </GlassCard>
+                        >
+                          {r}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Free-text input */}
+                    <Input
+                      placeholder="Or type a custom role..."
+                      value={role}
+                      onChange={(e) => setRole(e.target.value)}
+                      className="bg-input border-border focus:border-primary rounded-xl h-11"
+                    />
+                  </div>
+                </GlassCard>
+
+                {/* Difficulty Picker */}
+                <GlassCard>
+                  <div className="space-y-5">
+                    <div>
+                      <Label className="text-lg font-semibold text-foreground">Difficulty Level</Label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Sets the depth and complexity of follow-up questions
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4">
+                      {DIFFICULTIES.map((d) => (
+                        <button
+                          key={d.value}
+                          onClick={() => setDifficulty(d.value)}
+                          className={cn(
+                            "rounded-xl border-2 p-4 text-left transition-all duration-200 space-y-1",
+                            difficulty === d.value
+                              ? d.activeBg
+                              : "border-border hover:border-primary/30"
+                          )}
+                        >
+                          <div className={cn("font-bold text-lg", d.color)}>{d.label}</div>
+                          <div className="text-xs text-muted-foreground leading-snug">{d.description}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </GlassCard>
+
+                {/* Interviewer Selection */}
+                <GlassCard>
+                  <div className="space-y-5">
+                    <div>
+                      <Label className="text-lg font-semibold text-foreground">Choose Your Interviewer</Label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Each interviewer has a distinct style and voice
+                      </p>
+                    </div>
+
+                    <div className="grid md:grid-cols-3 gap-4">
+                      {INTERVIEWERS.map((interviewer) => {
+                        const Icon = interviewer.icon
+                        const isSelected = selectedInterviewer?.name === interviewer.name
+                        return (
+                          <button
+                            key={interviewer.name}
+                            onClick={() => setSelectedInterviewer(interviewer)}
+                            className={cn(
+                              "rounded-xl border-2 p-4 text-left transition-all duration-200 space-y-3",
+                              isSelected
+                                ? "border-primary bg-primary/10"
+                                : "border-border hover:border-primary/30"
+                            )}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className={cn(
+                                "w-10 h-10 rounded-lg flex items-center justify-center",
+                                isSelected ? "bg-primary/20" : "bg-muted"
+                              )}>
+                                <Icon className={cn("w-5 h-5", isSelected ? "text-primary" : "text-muted-foreground")} />
+                              </div>
+                              {isSelected && (
+                                <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                                  <CheckCircle2 className="w-3 h-3 text-primary-foreground" />
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-foreground">{interviewer.name}</div>
+                              <div className="text-xs text-primary font-medium">{interviewer.style}</div>
+                            </div>
+                            <p className="text-xs text-muted-foreground leading-snug">
+                              {interviewer.description}
+                            </p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </GlassCard>
+              </>
+            )}
           </div>
         )}
 

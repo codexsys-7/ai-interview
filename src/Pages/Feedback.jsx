@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom"
 import {
   Download, ArrowRight, Trophy, Target, MessageSquare,
   Lightbulb, TrendingUp, TrendingDown, Clock, Award,
-  CheckCircle2, AlertCircle, Star, RefreshCw
+  CheckCircle2, AlertCircle, Star, RefreshCw, Home
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -22,14 +22,29 @@ function mapFeedbackData(resp, sessionData) {
 
   const overallScore = Math.round(parseFloat(overall.overallScore) || 0)
 
+  // Build a lookup from prompt text → quality metadata saved during the interview
+  const rawAnswers = sessionData?.answeredQuestions || []
+  const qualityByPrompt = {}
+  rawAnswers.forEach((a) => {
+    if (a.prompt) {
+      qualityByPrompt[a.prompt] = {
+        qualityLabel: a.qualityLabel || null,
+        isFollowUp: a.isFollowUp || false,
+      }
+    }
+  })
+
   // Map individual question scores (avg of 0-5 fields → 0-100)
   const questionScores = questions.map((q) => {
     const scores = q.scores || {}
     const avg = Object.values(scores).reduce((a, b) => a + parseFloat(b || 0), 0) / Math.max(Object.keys(scores).length, 1)
+    const meta = qualityByPrompt[q.prompt] || {}
     return {
       question: q.prompt || "Question",
       score: toPercent(avg),
       feedback: (q.strengths || [])[0] || "Good response.",
+      qualityLabel: meta.qualityLabel || null,
+      isFollowUp: meta.isFollowUp || false,
     }
   })
 
@@ -335,8 +350,31 @@ export default function FeedbackPage() {
                     <span className={cn("text-lg font-bold", getScoreColor(item.score))}>{item.score}</span>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h4 className="font-medium text-foreground">Q{index + 1}: {item.question}</h4>
-                    <p className="text-sm text-muted-foreground mt-1">{item.feedback}</p>
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <h4 className="font-medium text-foreground">Q{index + 1}: {item.question}</h4>
+                      {item.isFollowUp && (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-primary/15 text-primary">
+                          Follow-up
+                        </span>
+                      )}
+                      {item.qualityLabel && (
+                        <span className={cn(
+                          "px-2 py-0.5 rounded-full text-xs font-medium",
+                          item.qualityLabel === "Strong Response" || item.qualityLabel === "Adequate Response"
+                            ? "bg-green-500/15 text-green-400"
+                            : item.qualityLabel === "Good — Needs Elaboration" || item.qualityLabel === "Vague / Needs Elaboration"
+                              ? "bg-yellow-500/15 text-yellow-400"
+                              : item.qualityLabel === "Weak One-Liner" || item.qualityLabel === "Missing Key Elements" || item.qualityLabel === "Weak Response"
+                                ? "bg-red-500/15 text-red-400"
+                                : item.qualityLabel === "Silent Response"
+                                  ? "bg-muted text-muted-foreground"
+                                  : "bg-muted text-muted-foreground"
+                        )}>
+                          {item.qualityLabel}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-muted-foreground">{item.feedback}</p>
                   </div>
                 </div>
               ))}
@@ -346,6 +384,16 @@ export default function FeedbackPage() {
 
         {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Button
+            onClick={() => navigate("/")}
+            variant="outline"
+            size="lg"
+            className="rounded-xl border-border hover:border-primary/50 h-14 px-8 font-semibold"
+          >
+            <Home className="w-5 h-5 mr-2" />
+            Go to Home
+          </Button>
+
           <Button
             onClick={handleDownload}
             disabled={isDownloading}

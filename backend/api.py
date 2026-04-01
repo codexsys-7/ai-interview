@@ -1203,13 +1203,25 @@ async def transcribe_audio(file: UploadFile = File(...)) -> Dict[str, Any]:
 
         try:
             with open(tmp_path, "rb") as f:
-                stt_resp = client.audio.transcriptions.create(
-                    model="whisper-1",   # we can switch to another model, later after MVP.
-                    file=f,
-                    response_format="json",
-                    temperature=0,
-                    language="en"
-                )
+                # gpt-4o-transcribe gives significantly better accuracy than whisper-1,
+                # especially for technical vocabulary, accents, and short responses.
+                # Falls back to whisper-1 if gpt-4o-transcribe is unavailable.
+                try:
+                    stt_resp = client.audio.transcriptions.create(
+                        model="gpt-4o-transcribe",
+                        file=f,
+                        response_format="json",
+                    )
+                except Exception:
+                    f.seek(0)
+                    stt_resp = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f,
+                        response_format="json",
+                        temperature=0,
+                        language="en",
+                        prompt="Interview response about software engineering, technical skills, and professional experience."
+                    )
 
             text = (stt_resp.text or "").strip()
             return {"transcript": text}
@@ -3908,10 +3920,8 @@ async def generate_personalized_first_question(request: GenerateFirstQuestionReq
 # ==================== Job Description Interview Start Endpoints ====================
 
 # Dependency injection helpers
-def get_orchestrator() -> InterviewOrchestrator:
-    """Get or create InterviewOrchestrator instance."""
-    return InterviewOrchestrator()
-
+# NOTE: get_orchestrator() is defined at line ~2352 as a singleton.
+# That same singleton is used here via Depends — do NOT redefine it.
 
 def get_job_intro_generator() -> JobIntroductionGenerator:
     """Get or create JobIntroductionGenerator instance."""
