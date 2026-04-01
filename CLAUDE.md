@@ -5,7 +5,7 @@
 AI-powered interview simulator. Conducts intelligent, conversational interviews with real-time voice. Adapts questions based on answers, detects contradictions, remembers context — feels like talking to a real interviewer.
 
 **Current Branch:** `manual_testing_bug_fixes-clean-ui`
-**Current State:** Phase 1C COMPLETE. Still fixing bugs from manual testing (Session 2 active). Do NOT start Phase 1D work yet.
+**Current State:** Phase 1C COMPLETE. Session 2 bug fixes complete. Do NOT start Phase 1D until the duplicate `get_orchestrator()` bug is resolved and all fixes are manually verified.
 
 ---
 
@@ -140,7 +140,7 @@ Audio queue ends → auto-listen starts (Web Audio API + MediaRecorder)
 | 1B: Memory & Intelligence            | ✅ Complete        | Embeddings, semantic search, contradiction detection, 28 tests                      |
 | 1C: Intelligent Conversation + Voice | ✅ Complete        | Orchestrator, decision engine, TTS, audio queue, glowing orb                        |
 | Manual Testing Bug Fixes — Session 1 | ✅ Done            | Routing fixes, new pages (QuickInterview, PastInterviews, ResumeAnalysis config UI) |
-| Manual Testing Bug Fixes — Session 2 | 🔧 IN PROGRESS     | Dual-voice fix, auto-listen system, duplicate question guard (see below)            |
+| Manual Testing Bug Fixes — Session 2 | ✅ Done            | Audio system, auto-listen, dual-voice, follow-up probe logic, interview-end bug     |
 | 1D: Job Description Personalization  | ⏸️ After bug fixes | JD parsing, intro sequence, personalized questions                                  |
 | 2+: Avatar, Analytics, Enterprise    | 📋 Planned         | —                                                                                   |
 
@@ -153,11 +153,12 @@ Audio queue ends → auto-listen starts (Web Audio API + MediaRecorder)
 - ✅ `Interview.jsx` — reads `interviewConfig` from localStorage (set by ResumeAnalysis / QuickInterview)
 - ✅ Registered `/past-interviews` and `/quick-interview` routes in `main.jsx`
 
-### Session 2 Bug Fixes (this session — still ongoing)
+### Session 2 Bug Fixes (complete)
 
+#### Audio & Recording System
 - ✅ Fixed dual-voice / conflicting audio bug: `buildAudioQueue` now takes `isFollowUp` flag — paths are mutually exclusive
-- ✅ Fixed duplicate question bug: `usedQuestionIdsRef` Set; duplicate → `handleEndInterview()`
-- ✅ Fixed audio overlap: `playAudioQueue` hard-stops in-flight audio before starting new queue
+- ✅ Fixed duplicate question bug: `usedQuestionIdsRef` Set deduplicates by question text (primary) then ID (secondary); duplicate → `handleEndInterview()`
+- ✅ Fixed audio overlap: `playAudioQueue` hard-stops in-flight audio via `activePlayIdRef` before starting new queue
 - ✅ Replaced manual record/submit buttons with fully automatic listen system:
   - Auto-starts recording after AI finishes speaking (no button needed)
   - 20s dead-silence detector — only fires if **zero speech** detected (not an answer time limit)
@@ -166,6 +167,19 @@ Audio queue ends → auto-listen starts (Web Audio API + MediaRecorder)
   - Motivational messages on second consecutive silence
   - SVG countdown ring, animated waveform bars, per-phase status UI
 - ✅ Silence-after-speech timer increased to 5s (from 2.5s) to avoid cutting off mid-thought answers
+
+#### Follow-Up Probe System — Round 1
+- ✅ Fixed "weak"/"vague" acknowledgment text sounding like probe questions — `interviewer_personality.py`: replaced all probe-sounding phrases in the `"weak"` and `"vague"` acknowledgment lists with neutral ones (`"Alright, noted."`, `"Got it."`, etc.)
+- ✅ Fixed early stage (Q1–3) never generating follow-up probes — `realtime_response_generator.py` → `decide_response_action`: was always returning `"encourage"` for below-adequate early answers; now correctly returns `"probe_vague"` or `"probe_missing"`
+- ✅ Fixed probe history blocking all probes after first — `_generate_probe_if_needed`: changed tracking key from `session_id` → `f"{session_id}_{question_id}"` so the 1-probe limit is per-question, not per-entire-session
+
+#### Follow-Up Probe System — Round 2
+- ✅ Fixed weak answers with no `is_vague` flag or `missing_elements` bypassing probes — `decide_response_action`: removed the `else → "encourage"` fallback for weak answers in early and mid stage. Any answer below `ADEQUATE_THRESHOLD` now always returns `"probe_missing"` (if elements missing) or `"probe_vague"` — structural detection gaps can no longer silently skip probing
+- ✅ Fixed interview ending after answering a follow-up probe poorly — `interview_orchestrator.py` → `handle_follow_up_answer`: `should_proceed` was gated on `current_count >= MAX_FOLLOW_UPS`, but `get_orchestrator()` creates a fresh `InterviewOrchestrator` per request so `_follow_up_counts` always resets to 0. A weak follow-up answer produced `should_proceed=False` → no next question → frontend called `handleEndInterview()`. Fixed: `should_proceed = True` unconditionally — once a follow-up response is received, always proceed to the next question
+
+### Known Bug — Not Yet Fixed
+
+- ⚠️ **Duplicate `get_orchestrator()` in `api.py`** (~line 3911): A second definition overwrites the intended singleton (~line 2352), causing every API request to create a fresh `InterviewOrchestrator`. All instance-level state (`_follow_up_counts`, `_probe_history`) resets on every call. The `should_proceed = True` fix above papers over the worst symptom. Root cause fix requires careful surgery — the JD endpoint depends on the overriding version via FastAPI `Depends` and must not break.
 
 ---
 
@@ -210,4 +224,4 @@ cd frontend && npm install && npm run dev
 ---
 
 **Developer:** Abhinay Lingala
-**Last Updated:** March 19, 2026 | v1.0.2
+**Last Updated:** April 1, 2026 | v1.0.4
