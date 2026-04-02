@@ -599,7 +599,6 @@ export default function InterviewArenaPage() {
       startListeningModeRef.current = startListeningDefaultRef.current
 
       // ── Flow control ────────────────────────────────────────────────────
-      const flowControl = resp.flow_control || {}
       const nextQuestion = resp.next_question
 
       if (flowControl.needs_follow_up && !isFollowUp) {
