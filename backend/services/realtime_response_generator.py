@@ -102,7 +102,7 @@ class RealtimeResponseGenerator:
         self.conversation_context = conversation_context
 
         # Track probing history to avoid over-probing
-        self._probe_history: Dict[str, int] = {}  # session_id -> probe_count
+        self._probe_history: Dict[str, int] = {}  # "session_id_question_id" -> probe_count
 
         logger.info("RealtimeResponseGenerator initialized")
 
@@ -112,7 +112,8 @@ class RealtimeResponseGenerator:
         answer: str,
         question_id: int,
         question_intent: str,
-        quality_metrics: Optional[Dict] = None
+        quality_metrics: Optional[Dict] = None,
+        difficulty: str = "medium"
     ) -> Dict[str, Any]:
         """
         Generate immediate response after user finishes answering.
@@ -156,7 +157,8 @@ class RealtimeResponseGenerator:
             response_action = await self.decide_response_action(
                 metrics,
                 conversation_stage,
-                question_id
+                question_id,
+                difficulty=difficulty
             )
             logger.info(f"Response action decided: {response_action}")
 
@@ -176,7 +178,8 @@ class RealtimeResponseGenerator:
                     session_id_str,
                     answer,
                     metrics,
-                    response_action
+                    response_action,
+                    question_id
                 )
                 if probe_info:
                     follow_up_probe = probe_info
@@ -396,7 +399,8 @@ class RealtimeResponseGenerator:
         self,
         quality_metrics: Dict[str, Any],
         conversation_stage: str,
-        question_number: int
+        question_number: int,
+        difficulty: str = "medium"
     ) -> str:
         """
         Decide what type of response to give.
@@ -405,11 +409,12 @@ class RealtimeResponseGenerator:
             quality_metrics: Quality metrics from analyze_answer_quality
             conversation_stage: "early" | "mid" | "late"
             question_number: Current question number
+            difficulty: Interview difficulty level ("easy" | "medium" | "hard")
 
         Returns:
             Response action type string
         """
-        logger.info(f"Deciding response action: stage={conversation_stage}, Q#{question_number}")
+        logger.info(f"Deciding response action: stage={conversation_stage}, Q#{question_number}, difficulty={difficulty}")
 
         completeness = quality_metrics.get("completeness_score", 0.5)
         specificity = quality_metrics.get("specificity_score", 0.5)
@@ -422,15 +427,33 @@ class RealtimeResponseGenerator:
 
         logger.info(f"Quality score: {quality_score:.0%}, vague: {is_vague}, missing: {missing_elements}")
 
-        # Early stage (Q1-3): More lenient, encourage more
+        # ── HARD MODE: always probe, no matter the answer quality ──────────────
+        # The goal is to go deeper on every answer — even excellent ones.
+        # This mirrors real senior/staff interviews where the interviewer always
+        # asks "why", "how did you measure that", or "what would you do differently".
+        if difficulty == "hard":
+            logger.info("Hard difficulty — always probing for deeper insight")
+            if missing_elements:
+                return "probe_missing"
+            # Even if nothing is structurally missing, push for depth/specifics
+            return "probe_vague"
+
+        # Early stage (Q1-3): Lenient for adequate answers, but always probe weak ones
         if conversation_stage == "early":
             if quality_score >= self.GOOD_THRESHOLD:
                 return "acknowledge_only"
             elif quality_score >= self.ADEQUATE_THRESHOLD:
+                if missing_elements:
+                    return "probe_missing"
+                elif is_vague:
+                    return "probe_vague"
                 return "encourage"
             else:
-                # Even for weak early answers, be gentle
-                return "encourage"
+                # Weak early answers: always probe — don't rely on is_vague/missing_elements
+                # because structural detection misses semantically poor answers
+                if missing_elements:
+                    return "probe_missing"
+                return "probe_vague"
 
         # Late stage (Q8+): Expect higher quality, probe less
         if conversation_stage == "late":
@@ -449,10 +472,7 @@ class RealtimeResponseGenerator:
 
         # Good answer (60-80%)
         if quality_score >= self.GOOD_THRESHOLD:
-            logger.info("Good answer - acknowledge, maybe gentle probe")
-            # Occasionally probe for even better answers
-            if missing_elements and len(missing_elements) <= 1:
-                return "acknowledge_only"  # Good enough, proceed
+            logger.info("Good answer - acknowledge only")
             return "acknowledge_only"
 
         # Adequate answer (40-60%)
@@ -464,14 +484,11 @@ class RealtimeResponseGenerator:
                 return "probe_vague"
             return "acknowledge_only"
 
-        # Weak answer (<40%)
-        logger.info("Weak answer - probe for specifics")
-        if is_vague:
-            return "probe_vague"
-        elif missing_elements:
+        # Weak answer (<40%): always probe — don't let is_vague=False slip through
+        logger.info("Weak answer - probing for specifics")
+        if missing_elements:
             return "probe_missing"
-        else:
-            return "encourage"
+        return "probe_vague"
 
     async def generate_acknowledgment_response(
         self,
@@ -995,7 +1012,8 @@ class RealtimeResponseGenerator:
         session_id: str,
         answer: str,
         metrics: Dict,
-        response_action: str
+        response_action: str,
+        question_id: int = 0
     ) -> Optional[Dict[str, Any]]:
         """
         Generate probe response if action requires it.
@@ -1005,16 +1023,19 @@ class RealtimeResponseGenerator:
             answer: The answer text
             metrics: Quality metrics
             response_action: Decided action type
+            question_id: Current question number (used to allow 1 probe per question)
 
         Returns:
             Probe dict or None
         """
-        # Track probe count to avoid over-probing
-        probe_count = self._probe_history.get(session_id, 0)
+        # Track probe count per question to avoid probing the same question twice
+        # but still allow probing on different questions throughout the interview
+        probe_key = f"{session_id}_{question_id}"
+        probe_count = self._probe_history.get(probe_key, 0)
 
         if probe_count >= 1:
-            # Already probed once this session, don't probe again
-            logger.info(f"Already probed {probe_count} time(s), skipping additional probe")
+            # Already probed on this question, don't probe again
+            logger.info(f"Already probed Q{question_id} once, skipping additional probe")
             return None
 
         missing_elements = metrics.get("missing_elements", [])
@@ -1039,8 +1060,8 @@ class RealtimeResponseGenerator:
                 probe_type
             )
 
-            # Update probe history
-            self._probe_history[session_id] = probe_count + 1
+            # Update probe history for this question
+            self._probe_history[probe_key] = probe_count + 1
 
             return {
                 "text": probe_text,
@@ -1056,8 +1077,8 @@ class RealtimeResponseGenerator:
                 "role"
             )
 
-            # Update probe history
-            self._probe_history[session_id] = probe_count + 1
+            # Update probe history for this question
+            self._probe_history[probe_key] = probe_count + 1
 
             return {
                 "text": probe_text,

@@ -1203,13 +1203,25 @@ async def transcribe_audio(file: UploadFile = File(...)) -> Dict[str, Any]:
 
         try:
             with open(tmp_path, "rb") as f:
-                stt_resp = client.audio.transcriptions.create(
-                    model="whisper-1",   # we can switch to another model, later after MVP.
-                    file=f,
-                    response_format="json",
-                    temperature=0,
-                    language="en"
-                )
+                # gpt-4o-transcribe gives significantly better accuracy than whisper-1,
+                # especially for technical vocabulary, accents, and short responses.
+                # Falls back to whisper-1 if gpt-4o-transcribe is unavailable.
+                try:
+                    stt_resp = client.audio.transcriptions.create(
+                        model="gpt-4o-transcribe",
+                        file=f,
+                        response_format="json",
+                    )
+                except Exception:
+                    f.seek(0)
+                    stt_resp = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f,
+                        response_format="json",
+                        temperature=0,
+                        language="en",
+                        prompt="Interview response about software engineering, technical skills, and professional experience."
+                    )
 
             text = (stt_resp.text or "").strip()
             return {"transcript": text}
@@ -3036,6 +3048,7 @@ class SubmitAnswerRealtimeRequest(BaseModel):
     difficulty: str = Field(default="medium", description="Interview difficulty level")
     total_questions: int = Field(default=10, ge=1, le=50, description="Total planned questions")
     generate_audio: bool = Field(default=True, description="Whether to generate TTS audio")
+    voice: Optional[str] = Field(default=None, description="Interviewer voice override for consistent TTS voice")
 
 
 class AcknowledgmentModel(BaseModel):
@@ -3115,6 +3128,7 @@ class SubmitFollowUpRequest(BaseModel):
     difficulty: str = Field(default="medium", description="Difficulty level")
     total_questions: int = Field(default=10, description="Total questions")
     generate_audio: bool = Field(default=True, description="Generate TTS audio")
+    voice: Optional[str] = Field(default=None, description="Interviewer voice override for consistent TTS voice")
 
 
 class SubmitFollowUpResponse(BaseModel):
@@ -3138,6 +3152,7 @@ class StartInterviewWithAudioRequest(BaseModel):
     difficulty: str = Field(default="medium", description="Difficulty level")
     total_questions: int = Field(default=10, ge=1, le=50, description="Total questions")
     generate_audio: bool = Field(default=True, description="Generate TTS audio")
+    voice: Optional[str] = Field(default=None, description="Interviewer voice override for consistent TTS voice")
 
 
 class StartInterviewWithAudioResponse(BaseModel):
@@ -3214,6 +3229,38 @@ async def submit_answer_realtime(request: SubmitAnswerRealtimeRequest):
         # Get orchestrator
         orchestrator = get_orchestrator()
 
+        # ── Store answer to DB BEFORE calling orchestrator ──────────────────
+        # This is critical: IntelligentQuestionGenerator calls get_all_answers()
+        # to build used_questions for deduplication. If the answer isn't in the
+        # DB yet, the question bank will have no history and can repeat questions.
+        try:
+            embed_text = f"Question: {request.question_text}\nAnswer: {request.user_answer}"
+            try:
+                embedding_vec = generate_embedding(embed_text)
+                embedding_json = json.dumps(embedding_vec)
+            except Exception:
+                embedding_json = None
+
+            with Session(engine) as db_session:
+                new_answer = InterviewAnswer(
+                    session_id=request.session_id,
+                    question_id=request.question_id,
+                    question_text=request.question_text,
+                    question_intent=request.question_intent,
+                    role=request.role,
+                    user_answer=request.user_answer,
+                    transcript_raw=request.transcript_raw or request.user_answer,
+                    audio_duration_seconds=request.audio_duration_seconds or 0,
+                    embedding=embedding_json,
+                )
+                db_session.add(new_answer)
+                db_session.commit()
+                logging.info(f"Answer stored to DB for Q{request.question_id} (session {request.session_id})")
+        except Exception as store_err:
+            # Non-fatal — log and continue. The AI response still works;
+            # deduplication just won't account for this answer in this request.
+            logging.warning(f"DB answer storage failed (continuing): {store_err}")
+
         # Build answer data
         answer_data = {
             "question_id": request.question_id,
@@ -3231,7 +3278,8 @@ async def submit_answer_realtime(request: SubmitAnswerRealtimeRequest):
             role=request.role,
             difficulty=difficulty,
             total_questions=request.total_questions,
-            generate_audio=request.generate_audio
+            generate_audio=request.generate_audio,
+            voice=request.voice
         )
 
         # Build response models
@@ -3339,7 +3387,8 @@ async def submit_followup(request: SubmitFollowUpRequest):
             role=request.role,
             difficulty=difficulty,
             total_questions=request.total_questions,
-            generate_audio=request.generate_audio
+            generate_audio=request.generate_audio,
+            voice=request.voice
         )
 
         # Build response models
@@ -3448,7 +3497,8 @@ async def start_interview_with_audio(request: StartInterviewWithAudioRequest):
             role=request.role,
             difficulty=difficulty,
             total_questions=request.total_questions,
-            generate_audio=request.generate_audio
+            generate_audio=request.generate_audio,
+            voice=request.voice
         )
 
         # Build response
@@ -3870,10 +3920,8 @@ async def generate_personalized_first_question(request: GenerateFirstQuestionReq
 # ==================== Job Description Interview Start Endpoints ====================
 
 # Dependency injection helpers
-def get_orchestrator() -> InterviewOrchestrator:
-    """Get or create InterviewOrchestrator instance."""
-    return InterviewOrchestrator()
-
+# NOTE: get_orchestrator() is defined at line ~2352 as a singleton.
+# That same singleton is used here via Depends — do NOT redefine it.
 
 def get_job_intro_generator() -> JobIntroductionGenerator:
     """Get or create JobIntroductionGenerator instance."""

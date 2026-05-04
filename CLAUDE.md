@@ -1,707 +1,227 @@
-# InterVue Labs - AI Interview Simulator - Development Guide
+# InterVue Labs - Claude Code Guide
 
-## Project Overview
+## What This Is
 
-AI-powered interview simulator that conducts intelligent, conversational interviews with real-time voice interaction. Goes beyond basic Q&A by remembering entire conversations, detecting patterns and contradictions, and adapting questions based on candidate responses.
+AI-powered interview simulator. Conducts intelligent, conversational interviews with real-time voice. Adapts questions based on answers, detects contradictions, remembers context — feels like talking to a real interviewer.
 
-**Goal:** Portfolio project demonstrating advanced AI/LLM orchestration, conversational systems, and real-time audio processing for recruiters and job seekers.
-
-**Status:** Phase 1C COMPLETE (Tasks 1-13 + Glowing Orb). Production-ready conversational interview system with voice, memory, and visual intelligence.
+**Current Branch:** `manual_testing_bug_fixes-clean-ui`
+**Current State:** Phase 1C COMPLETE. Session 2 bug fixes complete. Do NOT start Phase 1D until the duplicate `get_orchestrator()` bug is resolved and all fixes are manually verified.
 
 ---
 
 ## Tech Stack
 
-### Backend
-- **Framework:** FastAPI (Python 3.11+)
-- **Database:** PostgreSQL (Supabase)
-- **Authentication:** JWT
-- **LLM:** OpenAI GPT-4o-mini (question generation, decision making)
-- **TTS:** OpenAI Text-to-Speech API (voice synthesis)
-- **Embeddings:** OpenAI `text-embedding-3-small` (1536 dimensions)
-- **Vector Search:** Semantic similarity via cosine distance
-- **Audio:** MP3 generation and caching
-
-### Frontend
-- **Framework:** React 18
-- **Build Tool:** Vite
-- **Styling:** Tailwind CSS v3
-- **Icons:** Lucide React
-- **Audio:** HTML5 Audio API with queue management
-- **Animations:** CSS animations + Framer Motion
-
-### AI Services
-- **Question Generation:** GPT-4o-mini with contextual prompts
-- **Pattern Detection:** Semantic search across answer embeddings
-- **Contradiction Detection:** LLM-based with confidence scoring
-- **Voice Synthesis:** OpenAI TTS (alloy, nova voices)
-- **Memory System:** Conversation context + semantic embeddings
-
----
-
-## Environment Variables
-```bash
-# Backend (.env)
-OPENAI_API_KEY=sk-...              # LLM + TTS + embeddings
-DATABASE_URL=postgresql://...       # Supabase connection
-JWT_SECRET=your-secret-key
-SUPABASE_URL=https://...
-SUPABASE_KEY=...
-
-# Frontend (.env)
-VITE_API_URL=http://localhost:8000  # Dev
-# VITE_API_URL=https://api.intervuelabs.com  # Production
-```
+**Backend:** FastAPI (Python 3.11+), Supabase (PostgreSQL), JWT auth
+**AI:** OpenAI GPT-4o-mini (LLM), OpenAI TTS (voice), `text-embedding-3-small` (1536-dim embeddings)
+**Frontend:** React 18, Vite, Tailwind CSS v3, Lucide React, Framer Motion
 
 ---
 
 ## Project Structure
+
 ```
 InterVue-Labs/
 ├── backend/
-│   ├── api.py                          # FastAPI endpoints (12+ routes)
-│   ├── db.py                           # Database models
-│   ├── models.py                       # Pydantic schemas
-│   ├── ats.py                          # ATS scoring engine
-│   │
-│   ├── services/                       # 🧠 Intelligence Layer (11 services)
-│   │   ├── interview_orchestrator.py       # Master controller
+│   ├── api.py                            # 12+ FastAPI routes
+│   ├── db.py                             # DB models
+│   ├── models.py                         # Pydantic schemas
+│   ├── ats.py                            # ATS scoring
+│   ├── services/                         # Core intelligence (11 services)
+│   │   ├── interview_orchestrator.py     # Master controller — start here
 │   │   ├── intelligent_question_generator.py
 │   │   ├── interview_decision_engine.py
-│   │   ├── conversation_context.py         # Memory system
-│   │   ├── contradiction_detector.py       # Pattern detection
-│   │   ├── embedding_service.py            # Vector embeddings
+│   │   ├── conversation_context.py       # Memory system
+│   │   ├── contradiction_detector.py
+│   │   ├── embedding_service.py
 │   │   ├── realtime_response_generator.py
-│   │   ├── interviewer_personality.py      # 50+ response variations
-│   │   ├── tts_service.py                  # Text-to-speech
-│   │   ├── question_selector.py            # Question bank
-│   │   └── job_introduction_generator.py   # JD personalization
-│   │
-│   ├── prompts/
-│   │   └── interview_prompts.py            # LLM prompt templates (7 types)
-│   │
-│   ├── data/
-│   │   └── question_bank.json              # 100+ real interview questions
-│   │
-│   ├── audio_cache/                    # 🔊 Generated TTS files
-│   │   └── *.mp3
-│   │
-│   ├── migrations/
-│   │   ├── 001_uuid_migration.sql
-│   │   ├── 002_add_embeddings.sql
-│   │   └── 003_job_descriptions.sql
-│   │
-│   └── tests/                          # 🧪 Test suite (28+ tests)
-│       ├── test_embedding_service.py
-│       ├── test_conversation_context.py
-│       ├── test_contradiction_detector.py
-│       ├── test_semantic_search_api.py
-│       └── test_integration_phase1b.py
+│   │   ├── interviewer_personality.py    # 50+ response variations
+│   │   ├── tts_service.py
+│   │   ├── question_selector.py
+│   │   └── job_introduction_generator.py
+│   ├── prompts/interview_prompts.py      # 7 LLM prompt templates
+│   ├── data/question_bank.json           # 100+ real interview questions
+│   └── audio_cache/                      # Generated TTS MP3s
 │
-└── frontend/
-    └── src/
-        ├── pages/
-        │   ├── Interview.jsx               # Main interview UI
-        │   ├── Dashboard.jsx
-        │   └── Results.jsx
-        │
-        └── components/
-            └── Interview/
-                ├── GlowingOrb.jsx          # 🔵 AI presence visual
-                ├── ConversationIndicator.jsx
-                ├── AIResponseDisplay.jsx
-                ├── QuestionDisplay.jsx
-                └── AnswerInput.jsx         # 🎤 Voice recorder
+└── frontend/src/
+    ├── Pages/                            # All page components (capital P)
+    │   ├── Home.jsx                      # Landing: upload resume or quick practice
+    │   ├── Interview.jsx                 # Interview setup (role, difficulty, interviewer)
+    │   ├── ResumeAnalysis.jsx            # Post-upload analysis + config selection
+    │   ├── Interview_arena.jsx           # 🎯 Live interview room (auto-listen, TTS, orb)
+    │   ├── QuickInterview.jsx            # Quick start without resume (role grid + Just Battle)
+    │   ├── PastInterviews.jsx            # Past sessions viewer (coming soon stub)
+    │   ├── Feedback.jsx                  # Post-interview feedback
+    │   └── Dashboard.jsx
+    ├── api/
+    │   └── client.js                     # Central API client — all backend calls go here
+    └── components/Interview/
+        ├── GlowingOrb.jsx               # AI presence visual
+        ├── ConversationIndicator.jsx
+        ├── AIResponseDisplay.jsx
+        ├── QuestionDisplay.jsx
+        └── AnswerInput.jsx              # Voice recorder
 ```
 
 ---
 
-## System Architecture
+## Core Interview Flow
 
-### High-Level Flow
 ```
-User speaks answer
+AI plays question audio (TTS via OpenAI)
     ↓
-Frontend records + transcribes (STT)
+Audio queue ends → auto-listen starts (Web Audio API + MediaRecorder)
     ↓
-POST /api/interview/submit-answer-realtime
-    ↓
-Interview Orchestrator
-    ├─→ Store answer + generate embedding
-    ├─→ Analyze quality (STAR format, specificity)
-    ├─→ Detect patterns (contradictions, repetitions)
-    ├─→ Decision Engine decides next action
-    │   ├─ Contradiction? → Challenge question
-    │   ├─ Topic repeated 3x? → Deep dive
-    │   ├─ Vague answer? → Follow-up probe
-    │   └─ Good answer? → Next question
-    ├─→ Question Generator creates question
-    ├─→ TTS converts to audio
-    └─→ Return response + audio URLs
-    ↓
-Frontend plays audio queue
-    ├─ Acknowledgment: "Great example!"
-    ├─ Follow-up: "Tell me more about X"
-    ├─ Transition: "Let's move on"
-    └─ Next question
-    ↓
-Glowing orb appears during AI speech
-    ↓
-User hears question → answers → cycle repeats
-```
-
----
-
-## Database Schema
-
-### Key Tables
-
-**interview_sessions**
-- `id` (UUID, PK)
-- `user_id` (UUID, FK)
-- `role` (string)
-- `difficulty` (enum: easy/medium/hard)
-- `started_at`, `completed_at`
-
-**interview_answers**
-- `id` (UUID, PK)
-- `session_id` (UUID, FK)
-- `question_id` (int)
-- `question_text`, `question_intent`
-- `user_answer` (text)
-- `transcript_raw` (text)
-- `embedding` (JSON - 1536 dimensions)
-- `audio_duration_seconds` (float)
-- `created_at`
-
-**job_descriptions**
-- `id` (UUID, PK)
-- `session_id` (UUID, FK)
-- `company_name`, `job_title`
-- `responsibilities`, `requirements` (JSON arrays)
-- `role_description` (text)
-
----
-
-## Intelligence System
-
-### 1. Memory & Context
-
-**Embedding Generation:**
-- Every answer → OpenAI `text-embedding-3-small` (1536 dimensions)
-- Stored as JSON in database
-- Used for semantic similarity search
-
-**Semantic Search:**
-- Cosine similarity to find related answers
-- Threshold: >0.85 for strong relevance
-- Powers referencing questions
-
-**Conversation Context:**
-- Builds summary of all answers
-- Extracts topics discussed
-- Tracks recent context (last 5 answers)
-
-### 2. Pattern Detection
-
-**Contradiction Detection:**
-- Semantic similarity + LLM analysis
-- Confidence scoring (0.0-1.0)
-- Timeline overlap detection
-- Only challenges if confidence >0.7 and question >=5
-
-**Topic Repetition:**
-- Tracks semantic mentions (not just keywords)
-- "Python" = "programming in Python" = "used Python"
-- Triggers deep dive after 3+ mentions
-
-**Answer Quality Analysis:**
-- STAR format completeness
-- Specificity score (concrete vs vague)
-- Word count, metrics presence
-- Vagueness detection ("we", "things", "stuff")
-
-### 3. Decision Engine
-
-**Priority Logic:**
-
-1. **Challenge Contradiction** (if Q>=5, confidence>0.7, not recent)
-2. **Deep Dive** (if topic mentioned 3+ times, Q>=4)
-3. **Follow-up Probe** (if answer vague/incomplete)
-4. **Reference Past** (if similar answer exists, similarity>0.85)
-5. **Standard Question** (default progression)
-
-**Conversation Stages:**
-- Early (Q1-3): More lenient, encouraging
-- Mid (Q4-7): Balanced, probing
-- Late (Q8+): Expect higher quality
-
-### 4. Question Generation
-
-**7 Question Types:**
-
-1. **Standard** - Regular progression
-2. **Follow-up** - Probe for missing STAR elements
-3. **Reference** - "Earlier you mentioned X..."
-4. **Challenge** - Address contradiction
-5. **Deep Dive** - Explore expertise area
-6. **Contextual** - Rich conversation context
-7. **Job-Specific** - Tailored to JD
-
-**Question Sources:**
-- Real question bank (100+ questions from actual interviews)
-- LLM-generated (contextual, based on conversation)
-- Hybrid approach (real question + AI enhancement)
-
-### 5. Personality & Responses
-
-**50+ Response Variations:**
-- Acknowledgments: "Great example!", "I appreciate the detail", "Interesting perspective"
-- Follow-ups: "Tell me more", "Can you elaborate?", "Walk me through that"
-- Transitions: "Let's shift gears", "Moving on", "Now, about..."
-
-**Response Selection:**
-- Tracks last 5 responses to avoid repetition
-- Quality-based selection (excellent vs adequate vs weak)
-- Context-aware (early vs late interview)
-
-### 6. Audio System
-
-**TTS Generation:**
-- OpenAI TTS API (tts-1 model)
-- Voices: alloy (default), nova (warm), echo (authoritative)
-- Speed: 0.9-1.0 (clear, measured)
-- Context-aware (questions slower, acknowledgments normal)
-
-**Audio Caching:**
-- MP3 files saved to `backend/audio_cache/`
-- Cache key = hash(text + voice + speed)
-- Reduces API costs, faster responses
-
-**Audio Queue:**
-- Sequential playback (no overlap)
-- Order: acknowledgment → probe → transition → question
-- Visual sync with glowing orb
-
----
-
-## API Endpoints
-
-### Core Interview Flow
-
-**POST /api/interview/start-with-audio**
-- Starts interview session
-- Returns first question + audio
-- Input: `{user_id, role, difficulty, generate_audio}`
-
-**POST /api/interview/submit-answer-realtime**
-- Submits answer + gets AI response + next question
-- Input: `{session_id, question_id, user_answer, transcript_raw, audio_duration_seconds, ...}`
-- Returns: `{answer_stored, ai_response, next_question, flow_control}`
-
-**POST /api/interview/submit-followup**
-- Handles follow-up elaborations
-- Re-analyzes combined quality
-- Decides if ready to proceed
-
-**GET /api/interview/conversation-state/{session_id}**
-- Returns conversation summary, topics, patterns
-- Useful for debugging
-
-### Audio & Job Description
-
-**GET /api/audio/{filename}**
-- Serves MP3 files from cache
-- Headers: Content-Type: audio/mpeg
-
-**POST /api/interview/start-with-job-description**
-- Starts interview with JD introduction
-- Generates warm welcome + role overview
-- Returns introduction sequence + first question
-
-**POST /api/job-description/parse**
-- Parses uploaded JD (PDF/text)
-- Extracts structured data via LLM
-
----
-
-## Frontend Components
-
-### Main UI (Interview.jsx)
-
-**State Management:**
-- `currentQuestion` - Active question
-- `isAISpeaking` - Audio playback status
-- `audioQueue` - Sequential audio clips
-- `aiResponse` - Acknowledgment, probes, transitions
-- `flowControl` - Should proceed or wait for follow-up
-- `questionMetadata` - Patterns, stage, decision reason
-
-**Audio Queue System:**
-```javascript
-audioQueue: [
-  {url: "/api/audio/ack_abc.mp3", label: "acknowledgment"},
-  {url: "/api/audio/probe_def.mp3", label: "follow_up"},
-  {url: "/api/audio/question_ghi.mp3", label: "question"}
-]
+20s dead-silence detector running in background (FFT volume monitoring)
+    │
+    ├─ User speaks within 20s
+    │       ↓  speech detected (FFT avg > threshold)
+    │   Recording in progress (waveform bars animate)
+    │       ↓  5s of silence after speech ends
+    │   Auto-submit — no button press needed
+    │       ↓
+    │   POST /api/interview/submit-answer-realtime
+    │       ↓
+    │   Orchestrator: store + embed + analyze quality + detect patterns
+    │   Decision Engine: contradiction? follow-up? deep-dive? next?
+    │   Question Generator → TTS → return audio URLs + flow_control
+    │       ↓
+    │   buildAudioQueue(aiResponse, nextQuestion, isFollowUp):
+    │     isFollowUp=true  → ack + probe only (no transition/next question)
+    │     isFollowUp=false → ack + transition + next question (no probe)
+    │       ↓
+    │   GlowingOrb pulses → audio ends → auto-listen restarts
+    │
+    └─ No speech detected for 20s
+            ↓
+        "Do you want me to repeat the question?" (SpeechSynthesis)
+        Listen 8s for yes/no (transcribed, natural language detected)
+            ├─ Yes → replay question audio → fresh 20s window
+            │           ↓  silent again
+            │       Motivational message (random, 6 variants) → 10s → skip
+            └─ No / silence → 10s countdown → skip to next question
+                (skip submits "[No response — skipped]" to backend)
 ```
 
-Plays sequentially with visual feedback.
+---
 
-### Visual Components
+## Key API Endpoints
 
-**GlowingOrb.jsx** (🔵 AI Presence)
-- Appears when AI speaking
-- Blue gradient orb, 120px diameter
-- Pulsing animation (1.2s rhythm)
-- 3-4 floating particles inside
-- Premium sci-fi aesthetic
+| Endpoint                                             | Purpose                                        |
+| ---------------------------------------------------- | ---------------------------------------------- |
+| `POST /api/interview/start-with-audio`               | Start session, get first question + audio      |
+| `POST /api/interview/submit-answer-realtime`         | Submit answer, get AI response + next question |
+| `POST /api/interview/submit-followup`                | Handle follow-up elaborations                  |
+| `GET /api/interview/conversation-state/{session_id}` | Debug: get full context                        |
+| `GET /api/audio/{filename}`                          | Serve cached MP3 files                         |
+| `POST /api/interview/start-with-job-description`     | Start with JD intro                            |
+| `POST /api/job-description/parse`                    | Parse uploaded JD                              |
 
-**ConversationIndicator.jsx**
-- 🔗 Reference badge ("Connected to Q2")
-- ✨ Pattern detection ("Python mentioned 3x")
-- 🤔 Clarification badge
-- Question type badges (standard/follow-up/challenge/deep-dive/reference)
-
-**AIResponseDisplay.jsx**
-- Shows acknowledgments, probes, transitions
-- Speech bubble style
-- Color-coded by type
+> **Missing endpoint (TODO):** No `/api/tts` endpoint exists for on-demand text generation.
+> Repeat prompt and motivational messages currently use browser `SpeechSynthesis` as fallback.
+> A future session should add `/api/tts` to match these to the interviewer's OpenAI voice.
 
 ---
 
-## Testing Strategy
+## Decision Engine Priority
 
-### Test Coverage
-
-**Unit Tests (28+ tests):**
-- Embedding service (7 tests)
-- Conversation context (7 tests)
-- Contradiction detector (7 tests)
-- Semantic search API (7 tests)
-
-**Integration Tests (6 tests):**
-- End-to-end workflows
-- Multi-service orchestration
-
-**Edge Cases (12 tests):**
-- Long answers (500+ words)
-- One-word answers
-- Special characters
-- Concurrent submissions
-- 100+ answer sessions
-
-**Manual Test Scripts:**
-- `test_answer_storage_flow.sh`
-- `test_performance.sh`
-- `success_criteria_check.sh`
-
-### Success Criteria
-
-**Core Functionality:**
-- ✅ Semantic search finds related answers
-- ✅ Repetition detected (>85% accuracy)
-- ✅ Contradictions detected (<2s)
-- ✅ Conversation context includes all answers
-- ✅ Embeddings auto-generated
-
-**Performance:**
-- Answer processing: <3 seconds
-- Audio generation: <2 seconds
-- Pattern detection: Real-time (<500ms)
-- Sequential audio: No gaps or overlaps
+1. Challenge contradiction (Q≥5, confidence>0.7)
+2. Deep dive (topic mentioned 3+ times, Q≥4)
+3. Follow-up probe (vague/incomplete answer)
+4. Reference past answer (similarity>0.85)
+5. Standard next question (default)
 
 ---
 
-## ✅ Completed Phases
+## What's Done / What's Next
 
-### Phase 1A: Answer Storage (COMPLETE)
-- Database schema: `interview_answers` table
-- API: POST /submit, GET /answers/{session_id}
-- Real-time storage with metadata
+| Phase                                | Status             | Summary                                                                             |
+| ------------------------------------ | ------------------ | ----------------------------------------------------------------------------------- |
+| 1A: Answer Storage                   | ✅ Complete        | DB schema, submit/fetch APIs                                                        |
+| 1B: Memory & Intelligence            | ✅ Complete        | Embeddings, semantic search, contradiction detection, 28 tests                      |
+| 1C: Intelligent Conversation + Voice | ✅ Complete        | Orchestrator, decision engine, TTS, audio queue, glowing orb                        |
+| Manual Testing Bug Fixes — Session 1 | ✅ Done            | Routing fixes, new pages (QuickInterview, PastInterviews, ResumeAnalysis config UI) |
+| Manual Testing Bug Fixes — Session 2 | ✅ Done            | Audio system, auto-listen, dual-voice, follow-up probe logic, interview-end bug     |
+| 1D: Job Description Personalization  | ⏸️ After bug fixes | JD parsing, intro sequence, personalized questions                                  |
+| 2+: Avatar, Analytics, Enterprise    | 📋 Planned         | —                                                                                   |
 
-### Phase 1B: Memory & Intelligence (COMPLETE)
-- Embedding generation (1536 dimensions)
-- Semantic search (cosine similarity)
-- Conversation context builder
-- Contradiction detector
-- Pattern detection (repetitions, interests)
-- 28 automated tests + manual scripts
+### Session 1 Bug Fixes (complete)
 
-### Phase 1C: Intelligent Two-Way Conversation (COMPLETE)
+- ✅ Fixed "View Past Interviews" routing to wrong page — created `PastInterviews.jsx` stub
+- ✅ Created `QuickInterview.jsx` — role grid, difficulty, interviewer picker, "Just Battle" random start
+- ✅ `Home.jsx` — fixed quick-action button routes, added symmetric descriptions
+- ✅ `ResumeAnalysis.jsx` — added role/difficulty/interviewer config above Start; removed skip-able top-right Start button; added X reset
+- ✅ `Interview.jsx` — reads `interviewConfig` from localStorage (set by ResumeAnalysis / QuickInterview)
+- ✅ Registered `/past-interviews` and `/quick-interview` routes in `main.jsx`
 
-**Tasks 1-3: Core Intelligence**
-- ✅ Task 1: Intelligent Question Generator
-- ✅ Task 2: Interview Decision Engine
-- ✅ Task 3: Interview Orchestrator
+### Session 2 Bug Fixes (complete)
 
-**Tasks 4-7: API & UI Foundation**
-- ✅ Task 4: API Endpoints (Basic)
-- ✅ Task 5: Prompt Templates (7 types)
-- ✅ Task 5B: Real Question Integration (100+ questions)
-- ✅ Task 6: Frontend Updates (Basic)
-- ✅ Task 7: Visual Indicators
+#### Audio & Recording System
+- ✅ Fixed dual-voice / conflicting audio bug: `buildAudioQueue` now takes `isFollowUp` flag — paths are mutually exclusive
+- ✅ Fixed duplicate question bug: `usedQuestionIdsRef` Set deduplicates by question text (primary) then ID (secondary); duplicate → `handleEndInterview()`
+- ✅ Fixed audio overlap: `playAudioQueue` hard-stops in-flight audio via `activePlayIdRef` before starting new queue
+- ✅ Replaced manual record/submit buttons with fully automatic listen system:
+  - Auto-starts recording after AI finishes speaking (no button needed)
+  - 20s dead-silence detector — only fires if **zero speech** detected (not an answer time limit)
+  - 5s silence-after-speech → auto-submit
+  - "Want a repeat?" prompt via SpeechSynthesis + natural yes/no detection
+  - Motivational messages on second consecutive silence
+  - SVG countdown ring, animated waveform bars, per-phase status UI
+- ✅ Silence-after-speech timer increased to 5s (from 2.5s) to avoid cutting off mid-thought answers
 
-**Tasks 8-9: Personality & Real-Time**
-- ✅ Task 8: Interviewer Personality (50+ variations)
-- ✅ Task 9: Real-Time Response Generator
+#### Follow-Up Probe System — Round 1
+- ✅ Fixed "weak"/"vague" acknowledgment text sounding like probe questions — `interviewer_personality.py`: replaced all probe-sounding phrases in the `"weak"` and `"vague"` acknowledgment lists with neutral ones (`"Alright, noted."`, `"Got it."`, etc.)
+- ✅ Fixed early stage (Q1–3) never generating follow-up probes — `realtime_response_generator.py` → `decide_response_action`: was always returning `"encourage"` for below-adequate early answers; now correctly returns `"probe_vague"` or `"probe_missing"`
+- ✅ Fixed probe history blocking all probes after first — `_generate_probe_if_needed`: changed tracking key from `session_id` → `f"{session_id}_{question_id}"` so the 1-probe limit is per-question, not per-entire-session
 
-**Tasks 10-12: Voice & Audio**
-- ✅ Task 10: TTS Service (OpenAI integration)
-- ✅ Task 11: Real-Time Orchestrator Updates
-- ✅ Task 12: Real-Time API Endpoints
+#### Follow-Up Probe System — Round 2
+- ✅ Fixed weak answers with no `is_vague` flag or `missing_elements` bypassing probes — `decide_response_action`: removed the `else → "encourage"` fallback for weak answers in early and mid stage. Any answer below `ADEQUATE_THRESHOLD` now always returns `"probe_missing"` (if elements missing) or `"probe_vague"` — structural detection gaps can no longer silently skip probing
+- ✅ Fixed interview ending after answering a follow-up probe poorly — `interview_orchestrator.py` → `handle_follow_up_answer`: `should_proceed` was gated on `current_count >= MAX_FOLLOW_UPS`, but `get_orchestrator()` creates a fresh `InterviewOrchestrator` per request so `_follow_up_counts` always resets to 0. A weak follow-up answer produced `should_proceed=False` → no next question → frontend called `handleEndInterview()`. Fixed: `should_proceed = True` unconditionally — once a follow-up response is received, always proceed to the next question
 
-**Tasks 13-14: Conversational UI**
-- ✅ Task 13: Conversational UI (audio queue, visual feedback)
-- ✅ Task 14: Glowing Orb (AI presence visual)
+### Known Bug — Not Yet Fixed
 
-### Phase 1D: Job Description Personalization (PLANNED)
-- ⏸️ Task 14A: Job Introduction Generator (partially complete)
-- Introduction sequence generation
-- JD parsing and extraction
-- Personalized first question
-
----
-
-## 🚀 Future Roadmap
-
-### Phase 2: Advanced Features (PLANNED)
-
-**Avatar & Emotions:**
-- Full avatar with facial animations
-- Emotion detection from voice tone
-- Lip-sync with TTS
-- Multiple avatar styles
-
-**Analytics & Insights:**
-- Performance metrics dashboard
-- Answer quality scoring
-- Strengths/weaknesses analysis
-- Progress tracking over time
-- Comparison with industry benchmarks
-
-**Multi-Interviewer Panel:**
-- Simulate panel interviews
-- Different interviewer personalities
-- Role-based questioning (technical lead, HR, manager)
-
-**Industry-Specific Modes:**
-- Tech (FAANG-style)
-- Finance (case interviews)
-- Consulting (framework-based)
-- Healthcare, Legal, etc.
-
-### Phase 3: Enterprise Features (PLANNED)
-
-**Company Integration:**
-- Custom question banks per company
-- Company-specific scoring criteria
-- White-label branding
-
-**Candidate Screening:**
-- Automated initial screening
-- Scoring and ranking
-- Integration with ATS systems
-
-**Team Collaboration:**
-- Shared interview sessions
-- Collaborative evaluation
-- Interview scheduling
-
-### Phase 4: Platform Expansion (PLANNED)
-
-**Mobile Apps:**
-- iOS and Android native apps
-- Offline practice mode
-- Push notifications for daily practice
-
-**Integrations:**
-- LinkedIn profile import
-- Calendar integration
-- Job board connections
-
-**Monetization:**
-- Free tier (5 interviews/month)
-- Pro tier ($9.99/month)
-- Enterprise (custom pricing)
+- ⚠️ **Duplicate `get_orchestrator()` in `api.py`** (~line 3911): A second definition overwrites the intended singleton (~line 2352), causing every API request to create a fresh `InterviewOrchestrator`. All instance-level state (`_follow_up_counts`, `_probe_history`) resets on every call. The `should_proceed = True` fix above papers over the worst symptom. Root cause fix requires careful surgery — the JD endpoint depends on the overriding version via FastAPI `Depends` and must not break.
 
 ---
 
-## Known Issues & Limitations
+## Key Frontend Architecture Notes
 
-### Current Limitations
-
-1. **No Avatar Yet** - Using glowing orb placeholder
-2. **English Only** - No multilingual support
-3. **Audio in Browser Only** - No mobile app TTS
-4. **Single Interview Style** - No industry customization yet
-5. **Manual JD Upload** - No automated job board integration
-
-### Technical Debt
-
-1. **Audio Cache Management** - No cleanup of old files
-2. **Rate Limiting** - No API rate limits implemented
-3. **Error Recovery** - Limited retry logic for API failures
-4. **Scalability** - Single-server deployment
-5. **Testing Coverage** - Frontend tests not automated
-
-### Performance Considerations
-
-- **Cold Start:** First TTS call may be slow (~5s)
-- **Embedding Generation:** Adds ~1-2s per answer
-- **Sequential Questions:** Not parallelized (intentional for conversation flow)
-- **Memory Usage:** Grows with session length (acceptable for 10-15 questions)
+- **`Interview_arena.jsx`** owns the entire listen/record/submit cycle. Do not add recording logic anywhere else.
+- **`buildAudioQueue(aiResponse, nextQuestion, isFollowUp)`** — the `isFollowUp` boolean is **mandatory**. Wrong value = dual-voice bug returns.
+- **`interviewConfig` localStorage key** = `{ role, difficulty, interviewer }` — written by `ResumeAnalysis.jsx` or `QuickInterview.jsx`, read by `Interview.jsx`.
+- **Auto-listen state machine phases:** `idle → countdown → speaking → processing` (normal path) or `→ repeat_prompt → repeat_countdown → second_countdown → motivating` (silence path).
+- **No `/api/tts` endpoint** — repeat/motivational messages use `SpeechSynthesis` until one is added.
 
 ---
 
-## Development Guidelines
+## Rules for Claude Code
 
-### When Working on This Project
-
-**1. Always Read This File First**
-- Understand current state
-- Check what's complete vs planned
-- Review architecture before coding
-
-**2. Service Layer Pattern**
-- New features → new service in `backend/services/`
-- Keep orchestrator clean (coordination only)
-- Services should be testable in isolation
-
-**3. Prompts are Key**
-- LLM quality depends on prompt quality
-- Always use prompt templates from `backend/prompts/`
-- Test prompts extensively before deployment
-
-**4. Audio Caching is Critical**
-- Every TTS call costs money
-- Always check cache before generating
-- Use descriptive cache keys
-
-**5. Frontend State Management**
-- Audio queue must be sequential
-- Never play multiple audio clips simultaneously
-- Visual feedback synced with audio state
-
-**6. Testing is Non-Negotiable**
-- Write tests for new services
-- Update integration tests
-- Manual testing checklist in testing guide
-
-### Code Style
-
-**Backend:**
-- Type hints everywhere
-- Pydantic models for validation
-- Async/await for I/O operations
-- Docstrings for all public methods
-
-**Frontend:**
-- Functional components + hooks
-- Tailwind for styling (no custom CSS unless necessary)
-- Descriptive variable names
-- Comments for complex logic
+- **Read this file first every session**
+- **Do NOT recreate existing services** — Phase 1C is complete, extend don't duplicate
+- **Current focus = bug fixes only** — no Phase 1D until bugs are resolved and verified
+- **Audio caching is critical** — always check cache before generating TTS (costs money)
+- **Audio queue must be sequential** — never play multiple clips simultaneously
+- **`isFollowUp` flag is mandatory** in every `buildAudioQueue` call — see architecture notes above
+- **Service layer pattern** — new features go in `backend/services/`, keep orchestrator clean
+- **Always use prompt templates** from `backend/prompts/interview_prompts.py`
+- **Type hints + async/await** on all backend code
+- **Tailwind only** on frontend — no custom CSS unless absolutely necessary
+- **Write tests** for any new service added
 
 ---
 
-## Deployment
+## Local Dev
 
-### Current Status
-- **Backend:** Not deployed yet
-- **Frontend:** Not deployed yet
-- **Database:** Supabase (hosted PostgreSQL)
-
-### Deployment Plan (When Ready)
-
-**Backend:**
-- Platform: Render / Railway / Fly.io
-- Requirements: Python 3.11+, PostgreSQL access
-- Environment: Production `.env` with all keys
-- Build: `pip install -r requirements.txt`
-- Start: `uvicorn api:app --host 0.0.0.0 --port $PORT`
-
-**Frontend:**
-- Platform: Vercel / Netlify
-- Build: `npm run build`
-- Environment: `VITE_API_URL` pointing to backend
-
----
-
-## Key Metrics
-
-### What We've Built
-
-- **11 Core Services** - Complete intelligence system
-- **7 Prompt Templates** - Contextual question generation
-- **100+ Real Questions** - Authentic interview questions
-- **50+ Response Variations** - Natural personality
-- **28+ Automated Tests** - Comprehensive coverage
-- **5 UI Components** - Polished interview experience
-- **12+ API Endpoints** - Complete backend interface
-
-### Technical Achievements
-
-- **Semantic Memory** - 1536-dimensional embeddings
-- **Pattern Detection** - Real-time contradictions and repetitions
-- **Contextual Questioning** - References past answers naturally
-- **Voice Conversation** - Full TTS integration with caching
-- **Visual Intelligence** - Transparent AI decision-making
-- **Quality Analysis** - STAR format, specificity, completeness
-
----
-
-## Contact & Links
-
-**Developer:** [Your Name]  
-**Email:** [your-email@example.com]  
-**LinkedIn:** [Your LinkedIn]  
-**GitHub:** https://github.com/yourusername/intervue-labs  
-
----
-
-## License
-
-Copyright © 2025 [Your Name]. All Rights Reserved.
-
-See LICENSE file for details.
-
----
-
-**Last Updated:** March 5, 2026  
-**Current Version:** v1.0.0 (Phase 1C Complete)  
-**Next Milestone:** Phase 2 (Advanced Features)
-
----
-
-## Quick Start for New Developers
 ```bash
 # Backend
-cd backend
-pip install -r requirements.txt --break-system-packages
-cp .env.example .env  # Add your API keys
+cd backend && pip install -r requirements.txt --break-system-packages
 uvicorn api:app --reload
 
 # Frontend
-cd frontend
-npm install
-npm run dev
-
-# Access at http://localhost:5173
+cd frontend && npm install && npm run dev
+# → http://localhost:5173
 ```
 
 ---
 
-## Notes for Claude Code
-
-When working on this project:
-
-1. **Always check this file first** - Know what's done and what's planned
-2. **Phase 1C is complete** - Don't recreate existing services
-3. **Use existing services** - Extend, don't duplicate
-4. **Test everything** - We have comprehensive test suite
-5. **Audio is cached** - Don't regenerate unnecessarily
-6. **Follow the architecture** - Service layer pattern established
-7. **Prompts matter** - Quality comes from good prompts
-8. **Memory is key** - Embeddings drive intelligence
-
-**Most Important:** This is a conversational AI system, not a chatbot. Every decision should enhance the feeling of talking to a real interviewer who remembers, adapts, and responds naturally.
+**Developer:** Abhinay Lingala
+**Last Updated:** April 1, 2026 | v1.0.4

@@ -3,7 +3,14 @@
     "allow": [
       "Bash(python -m py_compile:*)",
       "Bash(python:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(test:*)",
+      "Bash(ls Interview:*)",
+      "Bash(cd:*)",
+      "Bash(cd D:\\\\AI Interview Simulator\\\\ai-interview:*)",
+      "Bash(grep -v \"^fastapi_env$\")",
+      "Bash(find 'D:/AI Interview Simulator/ai-interview' -name *.jsx)",
+      "Bash(python3 -c \"import json; data=json.load\\(open\\(''D:/AI Interview Simulator/ai-interview/backend/data/question_bank.json''\\)\\); questions=data.get\\(''questions'',data\\) if isinstance\\(data,dict\\) else data; print\\(''Total Q:'', len\\(questions\\)\\); print\\(''Sample IDs:'', [q.get\\(''id''\\) for q in questions[:10]]\\)\")"
     ]
   }
 }

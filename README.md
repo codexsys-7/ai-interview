@@ -1,7 +1,56 @@
-# 1. InterVue Labs — Initial MVP Cleanup & Code Refactor Summary
+# InterVue Labs — AI Interview Simulator
 
-This update finalizes the Initial MVP for the InterVue Labs AI Interview Simulator.
-We performed a complete cleanup, structural re-organization, and bug-fix pass to prepare the project for public testing and future feature releases.
+**Current Version:** v1.0.4 | **Branch:** `manual_testing_bug_fixes-clean-ui` | **Last Updated:** May 4, 2026
+
+An AI-powered interview simulator that conducts intelligent, conversational interviews with real-time voice. Adapts questions based on answers, detects contradictions, remembers context — feels like talking to a real interviewer.
+
+---
+
+## ✅ Phase Status
+
+| Phase | Status | Summary |
+|-------|--------|---------|
+| 1A: Answer Storage | ✅ Complete | DB schema, submit/fetch APIs |
+| 1B: Memory & Intelligence | ✅ Complete | Embeddings, semantic search, contradiction detection, 28 tests |
+| 1C: Intelligent Conversation + Voice | ✅ Complete | Orchestrator, decision engine, TTS, audio queue, glowing orb |
+| Manual Testing Bug Fixes — Session 1 | ✅ Complete | Routing fixes, QuickInterview, PastInterviews, ResumeAnalysis config UI |
+| Manual Testing Bug Fixes — Session 2 | ✅ Complete | VAD, auto-listen, follow-up probe logic, quality labels, media cleanup |
+| 1D: Job Description Personalization | ⏸️ Next | JD parsing, intro sequence, personalized questions |
+
+---
+
+## 🛠️ Session Bug Fixes (Sessions 1 & 2)
+
+### Session 1
+- Fixed "View Past Interviews" routing — created `PastInterviews.jsx` stub
+- Created `QuickInterview.jsx` — role grid, difficulty, interviewer picker, "Just Battle" random start
+- `Home.jsx` — fixed quick-action button routes, added symmetric descriptions
+- `ResumeAnalysis.jsx` — added role/difficulty/interviewer config above Start; removed skippable Start button; added X reset
+- `Interview.jsx` — reads `interviewConfig` from localStorage; Step 2 read-only when config pre-set
+
+### Session 2 — Audio & Recording
+- Fixed dual-voice / conflicting audio bug via `isFollowUp` flag in `buildAudioQueue`
+- Replaced manual record/submit buttons with fully automatic listen system (Web Audio API VAD)
+- Voice Activity Detection (VAD): frequency-band energy filtering (80–3000 Hz bins only) — rejects keyboard clicks, table thumps, ambient noise
+- Consecutive-frames guard (6 frames ~100ms) prevents transient spikes from triggering recording
+- 20s dead-silence detector — only fires if zero speech detected
+- 5s silence-after-speech → auto-submit
+- "Want a repeat?" prompt + natural yes/no detection via SpeechSynthesis
+- Motivational messages on second consecutive silence
+- Fixed recording cutoff after saying "yes" to repeat (stale frame counters now reset)
+- Fixed duplicate question bug — ID-based dedup instead of text-based (prevents false end at Q11)
+
+### Session 2 — Intelligence & Feedback
+- Removed duplicate `get_orchestrator()` definition that was resetting all session state per request
+- Upgraded transcription from `whisper-1` → `gpt-4o-transcribe` with whisper-1 fallback
+- Hard difficulty mode: always probes regardless of answer quality
+- Fixed interview ending prematurely after follow-up probe answers
+- Quality badge on feedback page now uses `quality_metrics.overall_quality` from backend + word count guard
+- Answer quality labels: Strong Response / Good — Needs Elaboration / Vague / Weak One-Liner / Missing Key Elements / Silent Response
+- Status banners repositioned to bottom of screen — no longer overlaps glowing orb
+- Full media cleanup on component unmount (camera/mic released even without clicking "End Interview")
+
+---
 
 
 ## Architecture🏗️

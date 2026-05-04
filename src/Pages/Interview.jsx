@@ -1,40 +1,129 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Sparkles, FileText, ArrowRight, Clock, Target,
-  MessageSquare, Briefcase, CheckCircle2
+  MessageSquare, Briefcase, CheckCircle2, ChevronDown,
+  Zap, Shield, Users,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
 import { GlassCard } from "@/components/glass-card"
 import { GlowingOrb } from "@/components/glowing-orb"
 import { UserStatus } from "@/components/user-status"
 import { cn } from "@/lib/utils"
 import { apiCreateSession, apiStartWithAudio } from "@/api/client"
 
+const COMMON_ROLES = [
+  "Software Engineer",
+  "Frontend Developer",
+  "Backend Developer",
+  "Full Stack Developer",
+  "Data Scientist",
+  "Product Manager",
+  "DevOps Engineer",
+  "UX Designer",
+]
+
+const DIFFICULTIES = [
+  {
+    value: "easy",
+    label: "Easy",
+    description: "Foundational questions, great for beginners",
+    color: "text-green-400",
+    activeBg: "border-green-500 bg-green-500/10",
+  },
+  {
+    value: "medium",
+    label: "Medium",
+    description: "Balanced depth — ideal for most candidates",
+    color: "text-yellow-400",
+    activeBg: "border-yellow-500 bg-yellow-500/10",
+  },
+  {
+    value: "hard",
+    label: "Hard",
+    description: "Senior-level probing with follow-ups",
+    color: "text-red-400",
+    activeBg: "border-red-500 bg-red-500/10",
+  },
+]
+
+const INTERVIEWERS = [
+  { name: "HR",           voice: "nova",  style: "Culture & Fit",  description: "Focuses on values, soft skills, and team culture",  icon: Users },
+  { name: "Manager",      voice: "alloy", style: "Ownership",      description: "Assesses delivery, ownership, and team impact",     icon: Shield },
+  { name: "Technical Lead", voice: "echo", style: "Technical Depth", description: "Digs into system design and engineering depth",   icon: Zap },
+  { name: "Team Lead",    voice: "alloy", style: "Collaboration",  description: "Evaluates day-to-day execution and teamwork",       icon: Users },
+  { name: "CEO",          voice: "echo",  style: "Big Picture",    description: "Vision, leadership, and strategic thinking",        icon: Shield },
+  { name: "CFO",          voice: "echo",  style: "Business Acumen", description: "Priorities, financial awareness, and trade-offs",  icon: Zap },
+]
+
 export default function InterviewPage() {
   const navigate = useNavigate()
+
+  // Step 1 state
   const [selectedType, setSelectedType] = useState(null)
   const [jobDescription, setJobDescription] = useState("")
+
+  // Step 2 state
+  const [role, setRole] = useState("")
+  const [difficulty, setDifficulty] = useState(null)
+  const [selectedInterviewer, setSelectedInterviewer] = useState(null)
+
+  // Misc
   const [isStarting, setIsStarting] = useState(false)
   const [startError, setStartError] = useState("")
+  // True when the user already configured the session in ResumeAnalysis — lock Step 2
+  const [configLocked, setConfigLocked] = useState(false)
+
+  // Pre-fill from interviewConfig saved on the resume analysis page
+  useEffect(() => {
+    const config = JSON.parse(localStorage.getItem("interviewConfig") || "null")
+    const resumeData = JSON.parse(localStorage.getItem("resumeData") || "null")
+
+    if (config?.role) {
+      setRole(config.role)
+    } else if (resumeData?.fallbackRoles?.[0]) {
+      setRole(resumeData.fallbackRoles[0])
+    }
+
+    if (config?.difficulty) {
+      setDifficulty(config.difficulty)
+    }
+
+    if (config?.interviewer) {
+      const match = INTERVIEWERS.find((i) => i.name === config.interviewer)
+      if (match) setSelectedInterviewer(match)
+    }
+
+    // Lock Step 2 if a full config was saved (role + difficulty + interviewer all set)
+    if (config?.role && config?.difficulty && config?.interviewer) {
+      setConfigLocked(true)
+    }
+  }, [])
+
+  const step2Visible = !!selectedType
+
+  const canStart =
+    selectedType &&
+    role.trim() &&
+    difficulty &&
+    selectedInterviewer &&
+    (selectedType !== "job-description" || jobDescription.trim())
 
   const handleStartInterview = async () => {
     setIsStarting(true)
     setStartError("")
     try {
-      const resumeData = JSON.parse(localStorage.getItem("resumeData") || "null")
-      const role = resumeData?.fallbackRoles?.[0] || "Software Engineer"
-      const difficulty = "medium"
-      const totalQuestions = 10
+      const totalQuestions = selectedType === "job-description" ? 12 : 10
 
       // 1. Create session
       const sessionResp = await apiCreateSession({
-        role,
+        role: role.trim(),
         difficulty,
         questionCount: totalQuestions,
-        interviewerNames: ["AI Interviewer"],
+        interviewerNames: [selectedInterviewer.name],
         plan: null,
       })
       const sessionId = sessionResp.session_id
@@ -42,18 +131,23 @@ export default function InterviewPage() {
       // 2. Get first question with audio
       const startResp = await apiStartWithAudio({
         sessionId,
-        role,
+        role: role.trim(),
         difficulty,
         totalQuestions,
         generateAudio: true,
+        voice: selectedInterviewer.voice || "alloy",
       })
 
       // 3. Save session info and navigate
+      // Strip `icon` from the interviewer — Lucide components carry Symbol(react.forward_ref)
+      // which can't be cloned by history.pushState and causes a "could not be cloned" error.
+      const { icon: _icon, ...safeInterviewer } = selectedInterviewer ?? {}
       const sessionData = {
         sessionId,
-        role,
+        role: role.trim(),
         difficulty,
         totalQuestions,
+        interviewer: safeInterviewer,
         firstQuestion: startResp.first_question,
         jobDescription: selectedType === "job-description" ? jobDescription : null,
         answeredQuestions: [],
@@ -74,129 +168,131 @@ export default function InterviewPage() {
       <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-accent/10 rounded-full blur-3xl" />
 
       <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-6 py-12">
-        {/* Header */}
+
+        {/* ── Header ─────────────────────────────────────────────── */}
         <div className="text-center space-y-4 mb-12">
           <GlowingOrb size="lg" isSpeaking={!selectedType} />
           <h1 className="text-4xl md:text-5xl font-bold text-foreground mt-8">
-            Choose Your <span className="text-primary glow-text">Interview</span>
+            Set Up Your <span className="text-primary glow-text">Interview</span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-2xl">
-            Select the type of interview practice that best suits your preparation needs
+            Choose your interview type, then configure your session
           </p>
         </div>
 
-        {/* Interview Type Selection */}
-        <div className="w-full max-w-4xl grid md:grid-cols-2 gap-6 mb-8">
-          {/* General Interview */}
-          <div
-            onClick={() => setSelectedType("general")}
-            className={cn(
-              "cursor-pointer transition-all duration-300",
-              selectedType === "general" && "scale-[1.02]"
-            )}
-          >
-            <GlassCard
+        {/* ── STEP 1 — Interview Type ─────────────────────────────── */}
+        <div className="w-full max-w-4xl mb-2">
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-4">
+            Step 1 — Interview Type
+          </p>
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* General */}
+            <div
+              onClick={() => setSelectedType("general")}
               className={cn(
-                "h-full border-2 transition-all duration-300",
-                selectedType === "general"
-                  ? "border-primary glow-border"
-                  : "border-transparent hover:border-primary/30"
+                "cursor-pointer transition-all duration-300",
+                selectedType === "general" && "scale-[1.02]"
               )}
             >
-              <div className="space-y-6">
-                <div className="flex items-start justify-between">
-                  <div className="w-14 h-14 rounded-2xl bg-primary/20 flex items-center justify-center">
-                    <MessageSquare className="w-7 h-7 text-primary" />
-                  </div>
-                  {selectedType === "general" && (
-                    <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center">
-                      <CheckCircle2 className="w-4 h-4 text-primary-foreground" />
+              <GlassCard
+                className={cn(
+                  "h-full border-2 transition-all duration-300",
+                  selectedType === "general"
+                    ? "border-primary glow-border"
+                    : "border-transparent hover:border-primary/30"
+                )}
+              >
+                <div className="space-y-6">
+                  <div className="flex items-start justify-between">
+                    <div className="w-14 h-14 rounded-2xl bg-primary/20 flex items-center justify-center">
+                      <MessageSquare className="w-7 h-7 text-primary" />
                     </div>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <h3 className="text-2xl font-bold text-foreground">General Interview</h3>
-                  <p className="text-muted-foreground">
-                    Practice with common interview questions tailored to your resume and experience
-                  </p>
-                </div>
-
-                <div className="space-y-3 pt-4 border-t border-border">
-                  <div className="flex items-center gap-3">
-                    <Clock className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">15-20 minutes</span>
+                    {selectedType === "general" && (
+                      <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center">
+                        <CheckCircle2 className="w-4 h-4 text-primary-foreground" />
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <Target className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">10 questions</span>
+                  <div className="space-y-2">
+                    <h3 className="text-2xl font-bold text-foreground">General Interview</h3>
+                    <p className="text-muted-foreground">
+                      Practice with common interview questions tailored to your resume and experience
+                    </p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <Sparkles className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">AI-adapted difficulty</span>
+                  <div className="space-y-3 pt-4 border-t border-border">
+                    <div className="flex items-center gap-3">
+                      <Clock className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">15–20 minutes</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Target className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">10 questions</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Sparkles className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">AI-adapted difficulty</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </GlassCard>
-          </div>
+              </GlassCard>
+            </div>
 
-          {/* Job Description Based */}
-          <div
-            onClick={() => setSelectedType("job-description")}
-            className={cn(
-              "cursor-pointer transition-all duration-300",
-              selectedType === "job-description" && "scale-[1.02]"
-            )}
-          >
-            <GlassCard
+            {/* Job-Specific */}
+            <div
+              onClick={() => setSelectedType("job-description")}
               className={cn(
-                "h-full border-2 transition-all duration-300",
-                selectedType === "job-description"
-                  ? "border-primary glow-border"
-                  : "border-transparent hover:border-primary/30"
+                "cursor-pointer transition-all duration-300",
+                selectedType === "job-description" && "scale-[1.02]"
               )}
             >
-              <div className="space-y-6">
-                <div className="flex items-start justify-between">
-                  <div className="w-14 h-14 rounded-2xl bg-primary/20 flex items-center justify-center">
-                    <Briefcase className="w-7 h-7 text-primary" />
-                  </div>
-                  {selectedType === "job-description" && (
-                    <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center">
-                      <CheckCircle2 className="w-4 h-4 text-primary-foreground" />
+              <GlassCard
+                className={cn(
+                  "h-full border-2 transition-all duration-300",
+                  selectedType === "job-description"
+                    ? "border-primary glow-border"
+                    : "border-transparent hover:border-primary/30"
+                )}
+              >
+                <div className="space-y-6">
+                  <div className="flex items-start justify-between">
+                    <div className="w-14 h-14 rounded-2xl bg-primary/20 flex items-center justify-center">
+                      <Briefcase className="w-7 h-7 text-primary" />
                     </div>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <h3 className="text-2xl font-bold text-foreground">Job-Specific Interview</h3>
-                  <p className="text-muted-foreground">
-                    Paste a job description and practice with questions specific to that role
-                  </p>
-                </div>
-
-                <div className="space-y-3 pt-4 border-t border-border">
-                  <div className="flex items-center gap-3">
-                    <Clock className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">20-30 minutes</span>
+                    {selectedType === "job-description" && (
+                      <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center">
+                        <CheckCircle2 className="w-4 h-4 text-primary-foreground" />
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <Target className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">12-15 questions</span>
+                  <div className="space-y-2">
+                    <h3 className="text-2xl font-bold text-foreground">Job-Specific Interview</h3>
+                    <p className="text-muted-foreground">
+                      Paste a job description and practice with questions specific to that role
+                    </p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <FileText className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Role-specific preparation</span>
+                  <div className="space-y-3 pt-4 border-t border-border">
+                    <div className="flex items-center gap-3">
+                      <Clock className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">20–30 minutes</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Target className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">12–15 questions</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <FileText className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">Role-specific preparation</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </GlassCard>
+              </GlassCard>
+            </div>
           </div>
         </div>
 
         {/* Job Description Input */}
         {selectedType === "job-description" && (
-          <div className="w-full max-w-4xl mb-8">
+          <div className="w-full max-w-4xl mt-6">
             <GlassCard>
               <div className="space-y-4">
                 <Label htmlFor="job-description" className="text-lg font-semibold text-foreground">
@@ -217,21 +313,196 @@ export default function InterviewPage() {
           </div>
         )}
 
-        {/* Start Error */}
+        {/* ── STEP 2 — Role, Difficulty, Interviewer ──────────────── */}
+        {step2Visible && (
+          <div className="w-full max-w-4xl mt-10 space-y-8">
+            {/* Step label */}
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px bg-border" />
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                <ChevronDown className="w-3 h-3" />
+                Step 2 — Configure Your Session
+                {configLocked && (
+                  <span className="ml-2 px-2 py-0.5 rounded-full bg-primary/15 text-primary text-xs font-medium">
+                    Configured
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+
+            {/* ── LOCKED: read-only summary from ResumeAnalysis ── */}
+            {configLocked ? (
+              <GlassCard className="border-primary/20 bg-primary/5">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-primary" />
+                    <p className="text-sm text-muted-foreground">
+                      Session configured on the Resume Analysis page. To change these, go back and re-upload your resume.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-4 pt-2">
+                    <div className="rounded-xl bg-background border border-border px-4 py-3 space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Role</p>
+                      <p className="font-semibold text-foreground">{role}</p>
+                    </div>
+                    <div className="rounded-xl bg-background border border-border px-4 py-3 space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Difficulty</p>
+                      <p className={cn(
+                        "font-semibold capitalize",
+                        difficulty === "easy" ? "text-green-400"
+                          : difficulty === "medium" ? "text-yellow-400"
+                          : "text-red-400"
+                      )}>{difficulty}</p>
+                    </div>
+                    <div className="rounded-xl bg-background border border-border px-4 py-3 space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Interviewer</p>
+                      <p className="font-semibold text-foreground">{selectedInterviewer?.name}</p>
+                      <p className="text-xs text-primary">{selectedInterviewer?.style}</p>
+                    </div>
+                  </div>
+                </div>
+              </GlassCard>
+            ) : (
+              <>
+                {/* Role Selection */}
+                <GlassCard>
+                  <div className="space-y-5">
+                    <div>
+                      <Label className="text-lg font-semibold text-foreground">Target Role</Label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Questions and evaluation will be tailored to this role
+                      </p>
+                    </div>
+
+                    {/* Quick-pick chips */}
+                    <div className="flex flex-wrap gap-2">
+                      {COMMON_ROLES.map((r) => (
+                        <button
+                          key={r}
+                          onClick={() => setRole(r)}
+                          className={cn(
+                            "px-3 py-1.5 rounded-lg text-sm border transition-all duration-200",
+                            role === r
+                              ? "border-primary bg-primary/15 text-primary font-medium"
+                              : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                          )}
+                        >
+                          {r}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Free-text input */}
+                    <Input
+                      placeholder="Or type a custom role..."
+                      value={role}
+                      onChange={(e) => setRole(e.target.value)}
+                      className="bg-input border-border focus:border-primary rounded-xl h-11"
+                    />
+                  </div>
+                </GlassCard>
+
+                {/* Difficulty Picker */}
+                <GlassCard>
+                  <div className="space-y-5">
+                    <div>
+                      <Label className="text-lg font-semibold text-foreground">Difficulty Level</Label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Sets the depth and complexity of follow-up questions
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4">
+                      {DIFFICULTIES.map((d) => (
+                        <button
+                          key={d.value}
+                          onClick={() => setDifficulty(d.value)}
+                          className={cn(
+                            "rounded-xl border-2 p-4 text-left transition-all duration-200 space-y-1",
+                            difficulty === d.value
+                              ? d.activeBg
+                              : "border-border hover:border-primary/30"
+                          )}
+                        >
+                          <div className={cn("font-bold text-lg", d.color)}>{d.label}</div>
+                          <div className="text-xs text-muted-foreground leading-snug">{d.description}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </GlassCard>
+
+                {/* Interviewer Selection */}
+                <GlassCard>
+                  <div className="space-y-5">
+                    <div>
+                      <Label className="text-lg font-semibold text-foreground">Choose Your Interviewer</Label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Each interviewer has a distinct style and voice
+                      </p>
+                    </div>
+
+                    <div className="grid md:grid-cols-3 gap-4">
+                      {INTERVIEWERS.map((interviewer) => {
+                        const Icon = interviewer.icon
+                        const isSelected = selectedInterviewer?.name === interviewer.name
+                        return (
+                          <button
+                            key={interviewer.name}
+                            onClick={() => setSelectedInterviewer(interviewer)}
+                            className={cn(
+                              "rounded-xl border-2 p-4 text-left transition-all duration-200 space-y-3",
+                              isSelected
+                                ? "border-primary bg-primary/10"
+                                : "border-border hover:border-primary/30"
+                            )}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className={cn(
+                                "w-10 h-10 rounded-lg flex items-center justify-center",
+                                isSelected ? "bg-primary/20" : "bg-muted"
+                              )}>
+                                <Icon className={cn("w-5 h-5", isSelected ? "text-primary" : "text-muted-foreground")} />
+                              </div>
+                              {isSelected && (
+                                <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                                  <CheckCircle2 className="w-3 h-3 text-primary-foreground" />
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-foreground">{interviewer.name}</div>
+                              <div className="text-xs text-primary font-medium">{interviewer.style}</div>
+                            </div>
+                            <p className="text-xs text-muted-foreground leading-snug">
+                              {interviewer.description}
+                            </p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </GlassCard>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Error & Start Button ────────────────────────────────── */}
         {startError && (
-          <div className="w-full max-w-2xl mb-4">
+          <div className="w-full max-w-2xl mt-6">
             <div className="rounded-xl bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive text-center">
               {startError}
             </div>
           </div>
         )}
 
-        {/* Start Button */}
         <Button
           onClick={handleStartInterview}
-          disabled={!selectedType || (selectedType === "job-description" && !jobDescription.trim()) || isStarting}
+          disabled={!canStart || isStarting}
           size="lg"
-          className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl h-14 px-12 font-semibold text-lg glow-border disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300"
+          className="mt-10 bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl h-14 px-12 font-semibold text-lg glow-border disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300"
         >
           {isStarting ? (
             <div className="flex items-center gap-3">
@@ -248,7 +519,7 @@ export default function InterviewPage() {
         </Button>
 
         {/* Tips */}
-        <div className="mt-12 w-full max-w-2xl">
+        <div className="mt-10 w-full max-w-2xl">
           <GlassCard className="bg-primary/5 border-primary/20">
             <div className="flex items-start gap-4">
               <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0">

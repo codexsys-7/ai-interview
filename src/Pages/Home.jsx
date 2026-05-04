@@ -192,22 +192,29 @@ export default function HomePage() {
 
         {/* Quick Actions */}
         <div className="flex flex-wrap justify-center gap-4 mt-12">
-          <Button
-            variant="outline"
-            onClick={() => navigate("/interview")}
-            className="rounded-xl border-border hover:border-primary/50 hover:bg-secondary h-11 px-6"
-          >
-            <History className="w-4 h-4 mr-2" />
-            View Past Interviews
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => navigate("/interview")}
-            className="rounded-xl border-border hover:border-primary/50 hover:bg-secondary h-11 px-6"
-          >
-            Quick Practice
-            <ArrowRight className="w-4 h-4 ml-2" />
-          </Button>
+          <div className="flex flex-col items-center gap-1">
+            <Button
+              variant="outline"
+              onClick={() => navigate("/past-interviews")}
+              className="rounded-xl border-border hover:border-primary/50 hover:bg-secondary h-11 px-6"
+            >
+              <History className="w-4 h-4 mr-2" />
+              View Past Interviews
+            </Button>
+            <p className="text-xs text-muted-foreground">Review your previous sessions</p>
+          </div>
+          <div className="flex flex-col items-center gap-1">
+            <Button
+              variant="outline"
+              onClick={() => navigate("/quick-interview")}
+              className="rounded-xl border-border hover:border-primary/50 hover:bg-secondary h-11 px-6"
+            >
+              <Zap className="w-4 h-4 mr-2" />
+              Quick Practice
+              <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
+            <p className="text-xs text-muted-foreground">Start without uploading a resume</p>
+          </div>
         </div>
       </div>
 
