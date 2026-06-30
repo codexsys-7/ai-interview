@@ -156,6 +156,7 @@ Audio queue ends → auto-listen starts (Web Audio API + MediaRecorder)
 ### Session 2 Bug Fixes (complete)
 
 #### Audio & Recording System
+
 - ✅ Fixed dual-voice / conflicting audio bug: `buildAudioQueue` now takes `isFollowUp` flag — paths are mutually exclusive
 - ✅ Fixed duplicate question bug: `usedQuestionIdsRef` Set deduplicates by question text (primary) then ID (secondary); duplicate → `handleEndInterview()`
 - ✅ Fixed audio overlap: `playAudioQueue` hard-stops in-flight audio via `activePlayIdRef` before starting new queue
@@ -169,11 +170,13 @@ Audio queue ends → auto-listen starts (Web Audio API + MediaRecorder)
 - ✅ Silence-after-speech timer increased to 5s (from 2.5s) to avoid cutting off mid-thought answers
 
 #### Follow-Up Probe System — Round 1
+
 - ✅ Fixed "weak"/"vague" acknowledgment text sounding like probe questions — `interviewer_personality.py`: replaced all probe-sounding phrases in the `"weak"` and `"vague"` acknowledgment lists with neutral ones (`"Alright, noted."`, `"Got it."`, etc.)
 - ✅ Fixed early stage (Q1–3) never generating follow-up probes — `realtime_response_generator.py` → `decide_response_action`: was always returning `"encourage"` for below-adequate early answers; now correctly returns `"probe_vague"` or `"probe_missing"`
 - ✅ Fixed probe history blocking all probes after first — `_generate_probe_if_needed`: changed tracking key from `session_id` → `f"{session_id}_{question_id}"` so the 1-probe limit is per-question, not per-entire-session
 
 #### Follow-Up Probe System — Round 2
+
 - ✅ Fixed weak answers with no `is_vague` flag or `missing_elements` bypassing probes — `decide_response_action`: removed the `else → "encourage"` fallback for weak answers in early and mid stage. Any answer below `ADEQUATE_THRESHOLD` now always returns `"probe_missing"` (if elements missing) or `"probe_vague"` — structural detection gaps can no longer silently skip probing
 - ✅ Fixed interview ending after answering a follow-up probe poorly — `interview_orchestrator.py` → `handle_follow_up_answer`: `should_proceed` was gated on `current_count >= MAX_FOLLOW_UPS`, but `get_orchestrator()` creates a fresh `InterviewOrchestrator` per request so `_follow_up_counts` always resets to 0. A weak follow-up answer produced `should_proceed=False` → no next question → frontend called `handleEndInterview()`. Fixed: `should_proceed = True` unconditionally — once a follow-up response is received, always proceed to the next question
 
@@ -208,6 +211,27 @@ Audio queue ends → auto-listen starts (Web Audio API + MediaRecorder)
 - **Write tests** for any new service added
 
 ---
+
+## Bug Fixing Protocol
+
+### Before attempting ANY fix:
+
+1. READ the relevant files first. Do not guess.
+2. State your hypothesis in ONE sentence: "The bug is caused by X in file Y"
+3. Wait for my confirmation before changing code.
+
+### While fixing:
+
+4. Make the SMALLEST possible change that tests your hypothesis.
+5. If a fix doesn't work after 2 attempts with the same hypothesis, STOP.
+   - Say: "My hypothesis was wrong. Here's what I've learned so far: [summary]"
+   - Propose a NEW hypothesis.
+
+### Never:
+
+- Do not refactor unrelated code while fixing a bug.
+- Do not change more than 2 files per fix attempt.
+- Do not repeat a fix you already tried.
 
 ## Local Dev
 
