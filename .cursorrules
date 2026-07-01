@@ -4,7 +4,7 @@
 
 AI-powered interview simulator. Conducts intelligent, conversational interviews with real-time voice. Adapts questions based on answers, detects contradictions, remembers context — feels like talking to a real interviewer.
 
-**Current Branch:** `04-05-26-fine-tuning-project` *(verify locally)*
+**Current Branch:** `july_1_modifying_core_question_generation*
 **Current State:** Phase 1C COMPLETE. Sessions 1–3 arena fixes implemented (VAD, silence flow, presence monitor, unified TTS). **Manual re-test checklist in `testing_log.md`** before Phase 1D.
 
 ---
