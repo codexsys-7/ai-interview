@@ -93,6 +93,42 @@ export async function apiStartWithAudio({ sessionId, role, difficulty = "medium"
   })
 }
 
+export async function apiRephraseQuestion({
+  questionText,
+  role,
+  generateAudio = true,
+  voice = null,
+}) {
+  return apiFetch("/api/interview/rephrase-question", {
+    method: "POST",
+    body: JSON.stringify({
+      question_text: questionText,
+      role,
+      generate_audio: generateAudio,
+      voice,
+    }),
+  })
+}
+
+export async function apiGetNextQuestion({
+  sessionId,
+  currentQuestionNumber,
+  role,
+  difficulty = "medium",
+  totalQuestions = 10,
+}) {
+  return apiFetch("/api/interview/next-question", {
+    method: "POST",
+    body: JSON.stringify({
+      session_id: sessionId,
+      current_question_number: currentQuestionNumber,
+      role,
+      difficulty,
+      total_questions: totalQuestions,
+    }),
+  })
+}
+
 // ---------- Real-time Interview ----------
 
 export async function apiSubmitAnswerRealtime({
@@ -153,6 +189,26 @@ export async function apiSubmitFollowup({
       total_questions: totalQuestions,
       generate_audio: generateAudio,
       voice,
+    }),
+  })
+}
+
+// ---------- TTS ----------
+
+export async function apiGenerateTts({
+  text,
+  context = "question",
+  voice = null,
+  conversationStage = "mid",
+}) {
+  return apiFetch("/api/tts/generate", {
+    method: "POST",
+    body: JSON.stringify({
+      text,
+      context,
+      voice,
+      conversation_stage: conversationStage,
+      return_url: true,
     }),
   })
 }

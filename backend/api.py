@@ -2467,6 +2467,63 @@ async def get_next_question(request: NextQuestionRequest):
         raise HTTPException(status_code=500, detail=f"Failed to generate next question: {str(e)}")
 
 
+class RephraseQuestionRequest(BaseModel):
+    """Request model for LLM rephrasing of a silent-timeout question."""
+    question_text: str = Field(..., min_length=1, max_length=2000)
+    role: str = Field(..., description="Job role being interviewed for")
+    generate_audio: bool = Field(default=True, description="Generate TTS for the rephrased question")
+    voice: Optional[str] = Field(default=None, description="Interviewer TTS voice override")
+
+
+class RephraseQuestionResponse(BaseModel):
+    """Rephrased question with optional TTS audio URL."""
+    rephrased_text: str
+    audio_url: Optional[str] = None
+
+
+@app.post("/api/interview/rephrase-question", response_model=RephraseQuestionResponse)
+async def rephrase_interview_question_endpoint(request: RephraseQuestionRequest):
+    """
+    Rephrase an interview question in different words after the candidate stays silent.
+
+    Uses GPT-4o-mini to preserve intent while changing wording. Optionally generates
+    TTS audio using the interviewer's voice.
+    """
+    from services.question_rephraser import rephrase_interview_question
+
+    logging.info(f"POST /api/interview/rephrase-question - Role: {request.role}")
+
+    try:
+        rephrased_text = await rephrase_interview_question(request.question_text, request.role)
+        audio_url: Optional[str] = None
+
+        if request.generate_audio and rephrased_text:
+            try:
+                tts = get_tts()
+                audio_bytes = await tts.generate_for_interview_context(
+                    rephrased_text,
+                    context_type="question",
+                    conversation_stage="early",
+                    voice_override=request.voice,
+                )
+                from pathlib import Path
+                audio_path = await tts.save_audio_file(
+                    audio_bytes,
+                    f"rephrase_{hash(rephrased_text) % 100000}",
+                )
+                audio_url = f"/api/audio/{Path(audio_path).name}"
+            except Exception as tts_err:
+                logging.warning(f"Rephrase TTS failed, returning text only: {tts_err}")
+
+        return RephraseQuestionResponse(
+            rephrased_text=rephrased_text,
+            audio_url=audio_url,
+        )
+    except Exception as e:
+        logging.exception(f"Error rephrasing question: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to rephrase question: {str(e)}")
+
+
 @app.post("/api/interview/submit-and-next", response_model=SubmitAndNextResponse)
 async def submit_answer_and_get_next(request: SubmitAndNextRequest):
     """

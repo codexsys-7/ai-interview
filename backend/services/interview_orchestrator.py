@@ -1123,6 +1123,14 @@ class InterviewOrchestrator:
                 voice
             )
 
+            # Silent / skipped answers must always advance — never block on a probe.
+            from services.realtime_response_generator import is_silent_answer
+            silent_skip = is_silent_answer(user_answer)
+            if silent_skip:
+                should_proceed = True
+                ai_response["follow_up_probe"] = None
+                logger.info("Silent skip detected — forcing proceed to next question")
+
             # If proceeding to next question, strip the follow-up probe from the response.
             # This prevents the frontend from seeing contradictory signals
             # (needs_follow_up=True + should_proceed=True at the same time).
@@ -1160,11 +1168,14 @@ class InterviewOrchestrator:
 
                     # Add transition if proceeding to next question
                     if ai_response.get("transition") is None and next_question:
-                        transition_text = self.personality.generate_transition(
-                            "your answer",
-                            "the next topic",
-                            "natural"
-                        )
+                        if silent_skip:
+                            transition_text = self.personality.generate_silent_skip_transition()
+                        else:
+                            transition_text = self.personality.generate_transition(
+                                "your answer",
+                                "the next topic",
+                                "natural"
+                            )
                         ai_response["transition"] = await self._generate_audio_for_text(
                             transition_text,
                             "transition",

@@ -4,8 +4,19 @@
 
 AI-powered interview simulator. Conducts intelligent, conversational interviews with real-time voice. Adapts questions based on answers, detects contradictions, remembers context — feels like talking to a real interviewer.
 
-**Current Branch:** `manual_testing_bug_fixes-clean-ui`
-**Current State:** Phase 1C COMPLETE. Session 2 bug fixes complete. Do NOT start Phase 1D until the duplicate `get_orchestrator()` bug is resolved and all fixes are manually verified.
+**Current Branch:** `04-05-26-fine-tuning-project` *(verify with `git branch`)*
+**Current State:** Phase 1C COMPLETE. Session 3 arena fixes done (July 1, 2026). **Read `testing_log.md` re-test checklist before Phase 1D.**
+
+### Catch-up quick links
+
+| Doc | Purpose |
+|-----|---------|
+| `testing_log.md` | Manual test log + Session 2 changelog + re-test checklist |
+| `bugs.md` | Bug tracker (#17–27 Session 3 fixes) |
+| `.cursorrules` | Architecture, flows, assistant rules (most up to date) |
+| `src/Pages/Interview_arena.jsx` | Arena audio bus, silence FSM, presence wiring |
+| `src/utils/presenceMonitor.js` | Face monitor timings: 3s warn, 10s post-warn |
+| `src/utils/speechVad.js` | Silero VAD (dynamic import) |
 
 ---
 

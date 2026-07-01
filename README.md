@@ -1,639 +1,214 @@
 # InterVue Labs — AI Interview Simulator
 
-**Current Version:** v1.0.4 | **Branch:** `manual_testing_bug_fixes-clean-ui` | **Last Updated:** May 4, 2026
+**Version:** v1.0.5 | **Branch:** `04-05-26-fine-tuning-project` | **Last Updated:** July 1, 2026
 
 An AI-powered interview simulator that conducts intelligent, conversational interviews with real-time voice. Adapts questions based on answers, detects contradictions, remembers context — feels like talking to a real interviewer.
 
 ---
 
-## ✅ Phase Status
+## Phase Status
 
 | Phase | Status | Summary |
-|-------|--------|---------|
+| ----- | ------ | ------- |
 | 1A: Answer Storage | ✅ Complete | DB schema, submit/fetch APIs |
-| 1B: Memory & Intelligence | ✅ Complete | Embeddings, semantic search, contradiction detection, 28 tests |
+| 1B: Memory & Intelligence | ✅ Complete | Embeddings, semantic search, contradiction detection, 28+ tests |
 | 1C: Intelligent Conversation + Voice | ✅ Complete | Orchestrator, decision engine, TTS, audio queue, glowing orb |
-| Manual Testing Bug Fixes — Session 1 | ✅ Complete | Routing fixes, QuickInterview, PastInterviews, ResumeAnalysis config UI |
-| Manual Testing Bug Fixes — Session 2 | ✅ Complete | VAD, auto-listen, follow-up probe logic, quality labels, media cleanup |
+| Manual Testing Bug Fixes — Sessions 1 & 2 | ✅ Implemented | Routing, VAD, auto-listen, probes, orchestrator singleton, feedback |
+| Manual Testing Bug Fixes — Session 3 | ✅ Implemented | Silero VAD, LLM rephrase, presence monitor, unified TTS, audio bus |
+| Manual Verification | 🔄 Pending | **See `testing_log.md` re-test checklist** before Phase 1D |
 | 1D: Job Description Personalization | ⏸️ Next | JD parsing, intro sequence, personalized questions |
 
 ---
 
-## 🛠️ Session Bug Fixes (Sessions 1 & 2)
+## Tech Stack
 
-### Session 1
-- Fixed "View Past Interviews" routing — created `PastInterviews.jsx` stub
-- Created `QuickInterview.jsx` — role grid, difficulty, interviewer picker, "Just Battle" random start
-- `Home.jsx` — fixed quick-action button routes, added symmetric descriptions
-- `ResumeAnalysis.jsx` — added role/difficulty/interviewer config above Start; removed skippable Start button; added X reset
-- `Interview.jsx` — reads `interviewConfig` from localStorage; Step 2 read-only when config pre-set
-
-### Session 2 — Audio & Recording
-- Fixed dual-voice / conflicting audio bug via `isFollowUp` flag in `buildAudioQueue`
-- Replaced manual record/submit buttons with fully automatic listen system (Web Audio API VAD)
-- Voice Activity Detection (VAD): frequency-band energy filtering (80–3000 Hz bins only) — rejects keyboard clicks, table thumps, ambient noise
-- Consecutive-frames guard (6 frames ~100ms) prevents transient spikes from triggering recording
-- 20s dead-silence detector — only fires if zero speech detected
-- 5s silence-after-speech → auto-submit
-- "Want a repeat?" prompt + natural yes/no detection via SpeechSynthesis
-- Motivational messages on second consecutive silence
-- Fixed recording cutoff after saying "yes" to repeat (stale frame counters now reset)
-- Fixed duplicate question bug — ID-based dedup instead of text-based (prevents false end at Q11)
-
-### Session 2 — Intelligence & Feedback
-- Removed duplicate `get_orchestrator()` definition that was resetting all session state per request
-- Upgraded transcription from `whisper-1` → `gpt-4o-transcribe` with whisper-1 fallback
-- Hard difficulty mode: always probes regardless of answer quality
-- Fixed interview ending prematurely after follow-up probe answers
-- Quality badge on feedback page now uses `quality_metrics.overall_quality` from backend + word count guard
-- Answer quality labels: Strong Response / Good — Needs Elaboration / Vague / Weak One-Liner / Missing Key Elements / Silent Response
-- Status banners repositioned to bottom of screen — no longer overlaps glowing orb
-- Full media cleanup on component unmount (camera/mic released even without clicking "End Interview")
+| Layer | Technologies |
+| ----- | ------------ |
+| **Backend** | FastAPI, SQLModel, PostgreSQL (Supabase), JWT + bcrypt |
+| **AI** | GPT-4o-mini, OpenAI TTS, `gpt-4o-transcribe`, `text-embedding-3-small` |
+| **Frontend** | React 19, Vite 7, Tailwind CSS, Radix/shadcn UI, Framer Motion, Lucide |
+| **Voice / Vision** | `@ricky0123/vad-web` (Silero VAD), `@mediapipe/tasks-vision` (face presence) |
+| **Other** | jsPDF (client-side feedback PDFs), deterministic ATS scoring |
 
 ---
 
+## Project Structure
 
-## Architecture🏗️
+```
+ai-interview/
+├── backend/          # FastAPI app, services, tests, audio cache
+└── src/              # React frontend (repo root — not frontend/)
+    ├── Pages/        # Route-level components
+    ├── Components/   # UI components (glowing-orb, glass-card, shadcn ui/)
+    └── api/client.js # Central API client
+```
 
-### **High level System Architecture**
-````mermaid
-graph TB
-    subgraph "Frontend - React"
-        UI[User Interface]
-        Audio[Audio System]
-        State[State Management]
-    end
-    
-    subgraph "Backend - FastAPI"
-        API[API Layer]
-        Orchestrator[Interview Orchestrator]
-        Services[Intelligence Services]
-    end
-    
-    subgraph "AI Services - OpenAI"
-        GPT[GPT-4o-mini]
-        TTS[Text-to-Speech]
-        Embeddings[Embeddings API]
-    end
-    
-    subgraph "Data Layer"
-        DB[(PostgreSQL)]
-        Cache[Audio Cache]
-        QB[Question Bank]
-    end
-    
-    UI -->|HTTP/JSON| API
-    API -->|Coordinates| Orchestrator
-    Orchestrator -->|Uses| Services
-    Services -->|Calls| GPT
-    Services -->|Generates| TTS
-    Services -->|Creates| Embeddings
-    Services -->|Reads/Writes| DB
-    TTS -->|Saves| Cache
-    Services -->|Selects| QB
-    Cache -->|Serves| UI
-    
-    style UI fill:#3b82f6,color:#fff
-    style Orchestrator fill:#8b5cf6,color:#fff
-    style GPT fill:#10b981,color:#fff
-    style DB fill:#f59e0b,color:#fff
-````
+### Backend Services
+
+| Service | Purpose |
+| ------- | ------- |
+| `interview_orchestrator.py` | Master controller — coordinates all intelligence |
+| `interview_decision_engine.py` | Decides next action (contradiction, deep dive, probe, etc.) |
+| `intelligent_question_generator.py` | Contextual question generation |
+| `conversation_context.py` | Memory, topics, summaries |
+| `contradiction_detector.py` | Cross-answer inconsistency detection |
+| `embedding_service.py` | Semantic search over answers |
+| `realtime_response_generator.py` | Acknowledgments, probes, flow control |
+| `interviewer_personality.py` | 50+ response variations |
+| `tts_service.py` | OpenAI TTS + MP3 cache |
+| `question_selector.py` | Question bank selection |
+| `job_introduction_generator.py` | JD-based intros (Phase 1D) |
 
 ---
 
-### **Interview Flow - Complete Journey**
-````mermaid
-graph TD
-    Start([👤 You Start Interview]) --> Q1[🎤 AI Asks Question via Voice]
-    
-    Q1 --> A1[🗣️ You Answer Out Loud]
-    
-    A1 --> Process{🧠 AI Analyzes Your Answer}
-    
-    Process --> Store[💾 Saves Your AnswerRemembers Everything]
-    
-    Store --> Think{🤔 AI Thinks...}
-    
-    Think -->|Your Answer Was Great| Response1[✅ AI: 'Excellent example!'Moves to Next Question]
-    
-    Think -->|Your Answer Was Vague| Response2[❓ AI: 'Can you give more detail?'Asks Follow-up]
-    
-    Think -->|You Contradicted Earlier Answer| Response3[🤨 AI: 'Earlier you said X, now Y?'Asks for Clarification]
-    
-    Think -->|You Mentioned Topic 3 Times| Response4[🎯 AI: 'You love Python!'Asks Deep Technical Question]
-    
-    Response1 --> Generate[🤖 AI Creates Next QuestionBased on Your Conversation]
-    Response2 --> Generate
-    Response3 --> Generate
-    Response4 --> Generate
-    
-    Generate --> Voice[🔊 Converts to Natural Voice]
-    
-    Voice --> Visual[🔵 Glowing Orb AppearsShows AI is Speaking]
-    
-    Visual --> Next[📢 You Hear Next Question]
-    
-    Next --> A1
-    
-    style Start fill:#e0f2fe,stroke:#0284c7,stroke-width:3px
-    style Process fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-    style Think fill:#f3e8ff,stroke:#a855f7,stroke-width:2px
-    style Generate fill:#dcfce7,stroke:#16a34a,stroke-width:2px
-    style Visual fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
-````
----
+## Running Locally
 
-### **Project Structure**
-````mermaid
-graph TD
-    A["📦 InterVue Labs"]
-    
-    A --> B["📂 backend/"]
-    B --> C["📄 api.py"]
-    C --> D["📄 db.py"]
-    D --> E["📄 models.py"]
-    
-    E --> F["📂 services/<br/>━━━━━━━━"]
-    F --> F1["🧠 orchestrator"]
-    F1 --> F2["❓ question_generator"]
-    F2 --> F3["🎯 decision_engine"]
-    F3 --> F4["💭 conversation_context"]
-    F4 --> F5["🔍 contradiction_detector"]
-    F5 --> F6["🔢 embedding_service"]
-    F6 --> F7["⚡ realtime_response"]
-    F7 --> F8["💬 personality"]
-    F8 --> F9["🔊 tts_service"]
-    F9 --> F10["📚 question_selector"]
-    F10 --> F11["📄 job_introduction"]
-    
-    F11 --> G["📂 prompts/"]
-    G --> H["📂 data/"]
-    H --> I["📂 audio_cache/"]
-    I --> J["📂 tests/"]
-    
-    A --> K["📂 frontend/"]
-    K --> L["📂 src/"]
-    L --> M["📂 pages/"]
-    
-    M --> M1["📄 Interview.jsx"]
-    M1 --> M2["📄 Dashboard.jsx"]
-    M2 --> M3["📄 Results.jsx"]
-    
-    M3 --> N["📂 components/Interview/"]
-    
-    N --> N1["🔵 GlowingOrb"]
-    N1 --> N2["📊 ConversationIndicator"]
-    N2 --> N3["💬 AIResponseDisplay"]
-    N3 --> N4["❓ QuestionDisplay"]
-    N4 --> N5["🎤 AnswerInput"]
-    
-    N5 --> O["🎨 index.css"]
-    
-    classDef root fill:#dbeafe,stroke:#3b82f6,stroke-width:3px
-    classDef important fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-    
-    class A root
-    class F,F1,F2,F9,M1,N1,N2 important
-````
----
+**Prerequisites:** Python 3.11+, Node.js, PostgreSQL connection (`DATABASE_URL` in `backend/.env`)
 
-### ✅ Dual-Mode ATS Scoring (Core Feature)
+```bash
+# Terminal 1 — Backend
+cd backend
+python -m venv venv
+.\venv\Scripts\activate        # Windows
+pip install -r requirements.txt
+uvicorn api:app --reload
 
-#### 🔹 Mode A — Resume Only
-Evaluates **general ATS readiness**:
-- Searchability (contact info, links)
-- ATS essentials (sections, bullets)
-- Content quality (skills, metrics)
-- Recruiter best practices
-
-#### 🔹 Mode B — Resume + Job Description
-Evaluates **job match + readiness**:
-- Hard skill overlap (Jobscan-style)
-- Responsibility alignment (Enhancv-style)
-- Seniority match
-- Missing keyword detection
-
-➡️ ATS scores are **deterministic**, repeatable, and not random.
+# Terminal 2 — Frontend (repo root)
+npm install
+npm run dev
+# → http://localhost:5173  (proxies /api → http://127.0.0.1:8000)
+```
 
 ---
 
-### 🛠️ Tech Stack
+## User Flow
 
-**Backend:**
-- Python 3.11+
-- FastAPI
-- PostgreSQL (Supabase)
-- OpenAI GPT-4o-mini
-- OpenAI TTS
-- Sentence Transformers
+```
+Login/Signup → Home
+    ├── Upload resume → Resume Analysis → Interview setup → Arena → Feedback
+    └── Quick Interview → Interview setup → Arena → Feedback
+```
 
-**Frontend:**
-- React 18
-- Vite
-- Tailwind CSS
-- Lucide Icons
-
-**AI Services:**
-- Semantic embeddings (1536 dimensions)
-- Pattern detection
-- Contradiction analysis
-- Natural language generation
-
-**Database:**
-- PostgreSQL (Supabase)
+Config (`role`, `difficulty`, `interviewer`) is stored in `localStorage` under `interviewConfig`.
 
 ---
 
-### 📂 Important Backend Files
-
-| File | Description |
-|----|----|
-| `api.py` | All API endpoints |
-| `ats.py` | Deterministic ATS scoring logic |
-| `models.py` | Database models |
-| `db.py` | Database initialization |
-| `ParseOut` | Strict response schema |
-
----
-
-### ▶️ Running the Project Locally
-**Backend**
-- cd backend
-- python -m venv venv
-- .\\venv\\Scripts\\activate.bat
-- pip install -r requirements.txt
-- uvicorn api:app --reload
-
-**Frontend**
-- cd frontend
-- npm install
-- npm run dev
-
----
-
-## 🚀 Features Overview
-
-#### 🔐 Authentication (New)
-- Secure **Signup & Login** flow
-- Password hashing using **bcrypt**
-- JWT-based authentication
-- Protected routes for authenticated users only
-- Logout functionality with session cleanup
-- Navbar displays **“Logged in as <User Name>”**
-
-#### 📥 PDF Download (New)
-- One-click **Download Feedback as PDF**
-- Client-side PDF generation using jsPDF
-- Includes:
-  - Interview metadata
-  - Overall score
-  - Strengths & improvements
-  - Question-level breakdown
-- No backend dependency for downloads
-
----
-
-## 🧭 Routing & Access Control
+## Routes
 
 | Route | Access | Description |
-|-----|------|------------|
-| `/` | Public Gate | Redirects to login or home |
-| `/login` | Public | Login page |
-| `/signup` | Public | Signup page |
-| `/home` | Protected | Main dashboard |
-| `/resume-analysis` | Protected | Resume insights |
-| `/interview` | Protected | Interview session |
-| `/feedback` | Protected | Feedback & PDF download |
+| ----- | ------ | ----------- |
+| `/` | Public | Auth gate → `/login` or `/home` |
+| `/login`, `/signup` | Public | Authentication |
+| `/home` | Protected | Landing — resume upload or quick actions |
+| `/resume-analysis` | Protected | ATS analysis + interview config |
+| `/quick-interview` | Protected | Start without resume |
+| `/interview` | Protected | Interview setup |
+| `/interview/arena` | Protected | Live voice interview room |
+| `/feedback` | Protected | Scores, quality labels, PDF download |
+| `/past-interviews` | Protected | Coming soon stub |
 
-Navbar and footer are rendered **only on protected routes** via a shared layout.
-
----
-
-## 🔑 Authentication System (Signup, Login, Logout)
-
-#### 1. Signup Functionality
-
-We implemented a complete user registration system using FastAPI on the backend and React on the frontend.
-What was added:
-- A dedicated Signup page with a clean, modern UI matching the app’s blue/white theme.
-- Form fields for Full Name, Email, and Password.
-- Client-side validation and loading states.
-- Backend endpoint /api/auth/signup.
-
-#### Backend logic:
-- Validates password length (minimum 8 characters).
-- Enforces bcrypt’s 72-byte password limit to prevent runtime crashes.
-- Hashes passwords securely using passlib + bcrypt.
-- Generates a unique user ID using UUID.
-- Stores user credentials safely in the database.
-- Issues a JWT token upon successful signup.
-##### Why this matters:
-- Prevents plain-text password storage.
-- Makes the platform safe for real users.
-- Lays the foundation for user-specific interview history and analytics.
-
-#### 2. Login Functionality
-We added a secure login flow for returning users.
-What was added:
-- A Login page visually aligned with Signup.
-- Backend endpoint /api/auth/login.
-- JWT-based authentication.
-##### Backend logic:
-- Verifies user email.
-- Compares entered password with the stored bcrypt hash.
-- Issues a new JWT token on success.
-##### Frontend behavior:
-- Stores authToken and authUser in localStorage.
-- Redirects authenticated users to the main application.
-- Shows meaningful error messages for invalid credentials.
-##### Why this matters:
-- Enables session-based access control.
-- Ensures only authenticated users can access interview features.
-
-#### 3. Logout Functionality
-We implemented a clean and predictable logout mechanism, integrated directly into the navbar.
-What was added:
-- A Logout button in the navbar.
-##### On click:
-- Clears authToken and authUser.
-- Clears cached interview/session data.
-- Redirects the user to the Login page.
-##### Security behavior:
-- Once logged out, protected routes are immediately inaccessible.
-- Manual URL access to /home, /interview, etc. is blocked.
-##### Why this matters:
-- Prevents stale sessions.
-- Ensures user privacy.
-- Required for any real-world, multi-user application.
+Protected routes use JWT from `localStorage.authToken`. Navbar/footer render via shared `layout.jsx`.
 
 ---
 
-#### 4. Route Protection & Auth Gate
-We refactored routing to behave like a real production app.
-Key changes:
-- Introduced an Auth Gate at /.
-- If logged in → redirect to /home
-- If not logged in → redirect to /login
-- Moved the actual dashboard to /home.
-- Protected all app routes using a ProtectedRoute wrapper.
-- Ensured Login and Signup pages do not show navbar/footer.
-##### Why this matters:
-- First-time users always see Login/Signup.
-- Logged-in users get a seamless experience.
-- Prevents accidental access to protected pages.
+## Core Interview Loop
+
+1. AI speaks question via TTS audio queue (`playAudioQueue`)
+2. Auto-listen starts (**Silero VAD** on recording stream — see `src/utils/speechVad.js`)
+3. User speaks → 5s silence → auto-submit → transcribe
+4. Backend orchestrator stores answer, embeds, analyzes, decides next action
+5. Returns acknowledgment + (probe OR next question) as audio URLs
+6. `buildAudioQueue(isFollowUp)` plays clips sequentially → loop
+
+**Silence path:** 12s no speech → LLM rephrase (on-screen text + TTS) → 12s again → motivation TTS → skip → next question (3 consecutive skips → end)
+
+**Presence path (parallel):** 3s out of frame → warning TTS → 10s countdown → end session. Return to frame → listening resumes.
+
+See `.cursorrules` and `testing_log.md` for full detail.
 
 ---
 
-#### 5. Navbar Enhancements
-We improved the navbar to reflect authentication state.
-##### What was added:
-- Display text: “Logged in as <User Name>”
-- Reads user details from localStorage.
-- Responsive behavior (hidden on small screens).
-- Integrated Logout button.
+## Key Features
 
-##### Why this matters:
-- Confirms to the user which account they are using.
-- Adds polish and professionalism to the UI.
+- **Conversational memory** — embeddings + semantic search across the session
+- **Adaptive questioning** — contradiction challenges, deep dives, follow-up probes
+- **Voice-first UX** — OpenAI TTS, automatic recording, glowing orb visual
+- **Dual-mode ATS scoring** — resume-only or resume + job description match
+- **Auth** — signup, login, logout, protected routes
+- **Feedback PDF** — client-side export via jsPDF
 
 ---
 
-## 📥 PDF Download for Feedback (Major Feature)
+## API Highlights
 
-#### 6. Download Feedback as PDF
-We added a one-click PDF export feature on the Feedback page.
-##### What was added:
-- “Download PDF” button.
-- Client-side PDF generation using jsPDF and jsPDF-AutoTable.
-##### PDF contents include:
-- Interview metadata (role, difficulty, date).
-- Overall interview score and summary.
-- Key strengths and improvement areas.
-- Question-by-question breakdown:
-- Question text
-- User answer
-- Scores
-- Strengths
-- Improvement suggestions
+| Endpoint | Purpose |
+| -------- | ------- |
+| `POST /api/interview/start-with-audio` | Start interview, first question + audio |
+| `POST /api/interview/submit-answer-realtime` | Submit answer, get AI response + next question |
+| `POST /api/interview/submit-followup` | Follow-up elaborations |
+| `POST /api/transcribe` | Speech-to-text |
+| `GET /api/audio/{filename}` | Cached TTS MP3s |
+| `POST /api/interview/rephrase-question` | LLM rephrase on silence timeout |
+| `POST /api/tts/generate` | On-demand TTS (motivation, warnings, wrap-up) |
 
-##### Why frontend PDF generation was chosen:
-- Faster user experience.
-- No backend load.
-- Works immediately in the browser.
-- No email or storage dependency.
-
-##### Why this matters:
-- Users can save/share feedback.
-- Makes the app feel complete and professional.
-- Essential for real interview preparation tools.
+Full list in `.cursorrules`.
 
 ---
 
-## 🛠️ Major Fixes & Improvements Implemented
+## Test Suite
 
-#### Authentication
-- Added Signup/Login/Logout
-- Fixed bcrypt version mismatch
-- Enforced password length constraints
-- Fixed UUID generation bug in models
+Run from `backend/`:
 
-#### CORS & Networking
-- Proper CORS middleware configuration
-- Fixed preflight (OPTIONS) failures
-- Ensured consistent localhost origins
-- Added global OPTIONS handler
+```bash
+pytest
+```
 
-#### Routing
-- Introduced Auth Gate at `/`
-- Separated public and protected routes
-- Fixed navbar/footer rendering via nested layout
-- Prevented unauthorized route access
-
-#### Interview Flow
-- Fixed NEXT button behavior
-- Ensured answers save correctly
-- Prevented duplicate session inserts
-- Improved microphone reliability handling
-
-#### Feedback
-- Fixed missing user answers in feedback
-- Improved scoring strictness
-- Added human-like feedback tone
-- Enabled PDF export
+| File | Focus |
+| ---- | ----- |
+| `test_embedding_service.py` | Embedding generation, similarity |
+| `test_conversation_context.py` | Context building, topic extraction |
+| `test_contradiction_detector.py` | Contradiction detection |
+| `test_semantic_search_api.py` | Search API endpoints |
+| `test_answer_storage.py` | Answer submission and retrieval |
 
 ---
 
-## Route Protection & Auth Gate
-We refactored routing to behave like a real production app.
-**Key changes:**
-- Introduced an Auth Gate at /.
-- If logged in → redirect to /home
-- If not logged in → redirect to /login
-- Moved the actual dashboard to /home.
-- Protected all app routes using a ProtectedRoute wrapper.
-- Ensured Login and Signup pages do not show navbar/footer.
-#### Why this matters:
-- First-time users always see Login/Signup.
-- Logged-in users get a seamless experience.
-- Prevents accidental access to protected pages.
-- 
----
-#### Known Constraints (Handled)
-- bcrypt 72-byte password limit enforced
-- Resume must be text-based PDF/DOCX
-- PDF generation is client-side (no email sending yet)
+## Session Bug Fixes (Summary)
 
---- 
+**Session 1:** Routing fixes, `QuickInterview.jsx`, `PastInterviews.jsx` stub, resume analysis config UI, `interviewConfig` localStorage flow.
+
+**Session 2:** Voice-band VAD, auto-listen state machine, dual-voice fix (`isFollowUp`), ID-based question dedup, orchestrator singleton fix, transcription upgrade, hard-mode probing, feedback quality labels, media cleanup on unmount.
+
+**Session 3 (July 1, 2026):** Silero VAD, 12s silence → LLM rephrase flow, silent-skip intelligence, unified OpenAI TTS audio bus, MediaPipe presence monitor (3s + 10s), cam/mic release on Feedback, post-warning listen resume fix. Full log: **`testing_log.md`**. Tracker: **`bugs.md`**.
+
+Detailed changelog in `.cursorrules`.
+
+---
+
+## Technical Decisions
+
+- **Embeddings stored as JSON** in PostgreSQL TEXT columns (no pgvector required)
+- **Answers stored immediately** per question (not at session end) for real-time intelligence
+- **Audio cached to disk** before regenerating TTS (cost control)
+- **Sequential audio queue** — never play multiple clips simultaneously
+
+---
 
 ## Future Enhancements
-- 2 Way Commincation(Head Tracking, Eye Movement)
-- Profile page
-- Email PDF feedback
+
+- Phase 1D: Job description personalization
 - Interview history dashboard
-- Admin analytics
-- Pro subscription tiers
-- Server-side PDF generation
-- Real-time interview avatars
+- Real-time avatars, analytics, enterprise tiers
 
 ---
 
-## 🧪 Test Suite
-
-#### **Test Coverage: 75%+**
-
-All new services have comprehensive test suites with proper mocking.
-
-### **Test Files Created:**
-
-| File | Test Cases | Description |
-|------|------------|-------------|
-| `test_embedding_service.py` | 14 | Embedding generation, similarity calculation |
-| `test_conversation_context.py` | 14 | Context building, topic extraction |
-| `test_contradiction_detector.py` | 13 | Contradiction detection, follow-up generation |
-| `test_semantic_search_api.py` | 10 | Search API endpoints |
-| `test_answer_storage.py` | 6 | Answer submission and retrieval |
-
----
-
-## 🔧 Technical Decisions
-
-#### 1. Embedding Storage Strategy
-**Decision:** Store as JSON string in TEXT column
-**Rationale:**
-- Supabase PostgreSQL supports JSON natively
-- No need for pgvector extension
-- Simpler deployment and migration
-- Adequate performance for session-scoped queries
-
-#### 2. Embedding Model Choice
-**Decision:** `text-embedding-3-small` (1536 dimensions)
-**Rationale:**
-- Lower cost than ada-002
-- Better performance on retrieval tasks
-- Sufficient dimensionality for semantic search
-
-#### 3. Database-First Architecture
-**Decision:** Store answers immediately, not at session end
-**Rationale:**
-- Enables real-time follow-up generation
-- Supports mid-interview analysis
-- Prevents data loss on browser close
-- Required for contradiction detection
-
-#### 4. Async Contradiction Detection
-**Decision:** Use async functions with OpenAI
-**Rationale:**
-- Non-blocking API calls
-- Better performance for multiple similarity checks
-- Scales well with concurrent interviews
-
----
-
-## 📊 Key Features
-
-- ✅ **Conversational Memory** - Remembers entire interview
-- ✅ **Pattern Detection** - Identifies contradictions and interests
-- ✅ **Voice Interaction** - Natural TTS responses
-- ✅ **Adaptive Questioning** - Adjusts based on answers
-- ✅ **Job Personalization** - Tailored to job descriptions
-- ✅ **Visual Intelligence** - See AI making connections
-
----
-
-## 🔄 How It Works
-
-1. **User answers question** → Stored with semantic embedding
-2. **AI analyzes** → Quality, patterns, contradictions
-3. **Decision engine** → Determines next action
-4. **Question generated** → Contextual, intelligent
-5. **TTS converts** → Natural voice response
-6. **Frontend displays** → Visual + audio feedback
-
---- 
-
-## 📈 Performance
-
-- Answer processing: <3 seconds
-- Audio generation: <2 seconds
-- Pattern detection: Real-time
-- Semantic search: <500ms
-
----
-
-## 📌 Summary
-
-Phase 1 and 1.2 establish the intelligent memory foundation for two-way interview communication:
-
-| Component | Purpose |
-|-----------|---------|
-| Real-time Storage | Immediate answer persistence |
-| Embeddings | Semantic understanding of answers |
-| Semantic Search | Find relevant previous answers |
-| Context Building | AI-ready conversation summaries |
-| Contradiction Detection | Ensure interview consistency |
-| Test Suite | 75%+ coverage with proper mocking |
-
-The system is now ready for dynamic, context-aware interview experiences.
-
----
-
-## 📜 License & Copyright
+## License & Copyright
 
 **Copyright © 2025 Abhinay Lingala. All Rights Reserved.**
 
-#### 📖 Usage Rights
+Permitted: educational use, personal projects, portfolio reference (with attribution).
+Not permitted without authorization: commercial use, redistribution as own work, removing copyright notices.
 
-This project is available for:
-- ✅ **Educational purposes** - Learn from the code
-- ✅ **Personal projects** - Use for your own learning
-- ✅ **Portfolio reference** - Cite in your work (with attribution)
+**Contact:** abhinaylingala7@gmail.com
 
-#### ⚠️ Restrictions
-
-The following are **NOT permitted** without written authorization:
-- ❌ Commercial use or integration into paid products
-- ❌ Redistribution as your own work
-- ❌ Creating competing commercial products
-- ❌ Removing copyright notices
-
-#### 🤝 Attribution
-
-If you reference this work, please credit:
-```
-InterVue Labs by Abhinay Lingala
-Repository: [https://github.com/codexsys-7/ai-interview?tab=readme-ov-file]
-```
----
-
-## 📧 Contact
-
-**For licensing inquiries, collaborations, or commercial use:**
-
-📧 **Email:** abhinaylingala7@gmail.com  
-
----
-
-### Author
-Built and architected by **Abhinay Lingala**.
-
----
+**Author:** Abhinay Lingala

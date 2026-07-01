@@ -2,7 +2,14 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { apiTranscribe, apiSubmitAnswerRealtime, apiSubmitFollowup } from "@/api/client"
+import { apiTranscribe, apiSubmitAnswerRealtime, apiSubmitFollowup, apiGetNextQuestion, apiRephraseQuestion, apiGenerateTts } from "@/api/client"
+import { trackInterviewStream, untrackInterviewStream, releaseAllInterviewMedia } from "@/utils/interviewMedia"
+import { createSpeechVad, stopSpeechVad } from "@/utils/speechVad"
+import {
+  createPresenceMonitor,
+  stopPresenceMonitor,
+  PRESENCE_END_AFTER_WARN_MS,
+} from "@/utils/presenceMonitor"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Audio queue builder
@@ -31,27 +38,16 @@ function buildAudioQueue(aiResponse, nextQuestion, isFollowUp = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
-// Voice Activity Detection (VAD) constants
-// Human speech sits mostly in the 80–3 000 Hz range.
-// With fftSize=256 and a typical 44.1 kHz sample rate,
-// each bin covers ~172 Hz, so bins 1–17 cover ~172–3 000 Hz.
-// We compute a weighted average of those mid-range bins instead of a flat
-// whole-spectrum average, which filters out low-frequency table/keyboard thuds
-// and high-frequency hiss that would otherwise trigger recording.
-const SPEECH_THRESHOLD = 22    // weighted mid-band energy above this = probable voice
-const SPEECH_CONFIRM_FRAMES = 6 // must be sustained for 6 consecutive frames (~100ms at 60fps)
-const VOICE_BIN_START = 1      // ~172 Hz
-const VOICE_BIN_END = 17       // ~3 000 Hz
+// Listen-mode timing — speech detection uses Silero VAD (see utils/speechVad.js)
 const SILENCE_AFTER_SPEECH_MS = 5000   // auto-submit after this many ms of silence
-const FIRST_COUNTDOWN_S = 20   // seconds before "want a repeat?"
-const REPEAT_LISTEN_S = 8    // seconds to listen for yes/no
-const SKIP_COUNTDOWN_S = 10   // seconds before skipping after "no"
-
-// Natural yes/no intent detection — covers common phrasings
-const YES_REGEX =
-  /\b(yes|yeah|yep|please|repeat|again|say that|come again|sorry|pardon|could you|what did|what was|huh|i didn.?t|didn.?t catch|missed that)\b/i
-const NO_REGEX =
-  /\b(no|nope|never ?mind|skip|next|proceed|move on|that.?s ok|that.?s fine|pass|continue|i.?m good|carry on)\b/i
+const MIC_CONSTRAINTS = {
+  channelCount: 1,
+  echoCancellation: true,
+  autoGainControl: true,
+  noiseSuppression: true,
+}
+const FIRST_COUNTDOWN_S = 12   // seconds of silence before auto rephrase
+const MAX_CONSECUTIVE_SILENT_SKIPS = 3  // end interview after this many silent questions in a row
 
 // Short meta-phrases that mean "please repeat the question" — NOT an interview answer.
 // Word count guard (< 15 words) prevents accidentally catching a real answer that
@@ -106,25 +102,29 @@ export default function InterviewArenaPage() {
   const analyserRef = useRef(null)
   const audioContextRef = useRef(null)
   const volumeFrameRef = useRef(null)
+  const sileroVadRef = useRef(null)
+  const consecutiveSilentSkipsRef = useRef(0)
+  const handleSkipToNextRef = useRef(null)
+  const presenceMonitorRef = useRef(null)
+  const presenceEndedRef = useRef(false)
+  const isCamOnRef = useRef(true)
+  const sessionRef = useRef(null)
+  const playInterviewerSpeechRef = useRef(null)
 
   // Timer refs
   const countdownIntervalRef = useRef(null)
   const silenceAfterSpeechRef = useRef(null)
-  const skipIntervalRef = useRef(null)
 
   // State mirrors (readable inside rAF / setTimeout without stale closures)
   const listenPhaseRef = useRef("idle")
   const hasSpeechRef = useRef(false)
   const repeatAttemptRef = useRef(false)
   const waitingForFollowUpRef = useRef(false)
-  // Counts consecutive FFT frames above SPEECH_THRESHOLD — prevents noise spikes
-  // from being mistaken for speech. Reset to 0 whenever a frame is below threshold.
-  const consecutiveSpeechFramesRef = useRef(0)
 
   // Callback refs — always point at the latest version of the function
   const autoSubmitRef = useRef(null)
-  const submitRepeatResponseRef = useRef(null)
   const startListeningModeRef = useRef(null)
+  const startListeningSecondChanceRef = useRef(null)
 
   // ── Session state ──────────────────────────────────────────────────────────
   const [session, setSession] = useState(null)
@@ -145,6 +145,8 @@ export default function InterviewArenaPage() {
   const [displayedText, setDisplayedText] = useState("")
   const [statusText, setStatusText] = useState("Loading interview...")
   const [error, setError] = useState("")
+  const [presenceWarning, setPresenceWarning] = useState(false)
+  const [presenceSecondsLeft, setPresenceSecondsLeft] = useState(0)
 
   // ── Follow-up state ────────────────────────────────────────────────────────
   const [waitingForFollowUp, setWaitingForFollowUp] = useState(false)
@@ -157,6 +159,14 @@ export default function InterviewArenaPage() {
   // activePlayIdRef: incremented each time a new queue starts.
   // Each play-loop captures its own id; if id changes it knows it was cancelled.
   const activePlayIdRef = useRef(0)
+  const interviewActiveRef = useRef(true)
+  const aiAudioBusyRef = useRef(false)
+  const isAISpeakingRef = useRef(false)
+  const pendingPresenceWarningAudioRef = useRef(false)
+  const playPresenceWarningAudioRef = useRef(null)
+  const tryFlushPendingPresenceWarningRef = useRef(null)
+  const presenceEndNavigatedRef = useRef(false)
+  const pendingResumeListenRef = useRef(false)
 
   // ── Listen-mode state ──────────────────────────────────────────────────────
   // Phases:
@@ -164,15 +174,10 @@ export default function InterviewArenaPage() {
   //   countdown       → waiting for user to start speaking (20s timer)
   //   speaking        → user detected, recording in progress
   //   processing      → transcribing + submitting to backend
-  //   repeat_prompt   → AI is asking "want a repeat?"
-  //   repeat_countdown→ listening for user's yes/no response (8s)
-  //   repeat_speaking → user detected during yes/no phase
-  //   second_countdown→ 10s wait before skipping to next question
-  //   motivating      → playing encouragement message
+  //   motivating      → brief encouragement before skipping to next question
   const [listenPhase, setListenPhase] = useState("idle")
   const [countdownValue, setCountdownValue] = useState(FIRST_COUNTDOWN_S)
   const [audioLevel, setAudioLevel] = useState(0)
-  const [skipCountdownValue, setSkipCountdownValue] = useState(SKIP_COUNTDOWN_S)
 
   // Convenience: keep ref in sync with state
   const setPhase = useCallback((phase) => {
@@ -184,37 +189,100 @@ export default function InterviewArenaPage() {
   const clearAllTimers = useCallback(() => {
     clearInterval(countdownIntervalRef.current)
     clearTimeout(silenceAfterSpeechRef.current)
-    clearInterval(skipIntervalRef.current)
   }, [])
 
   const stopListeningStream = useCallback(() => {
+    stopSpeechVad(sileroVadRef.current)
+    sileroVadRef.current = null
     if (mediaRecorderRef.current?.state !== "inactive") {
       try { mediaRecorderRef.current.stop() } catch {}
     }
-    listeningStreamRef.current?.getTracks().forEach((t) => t.stop())
-    listeningStreamRef.current = null
+    mediaRecorderRef.current = null
+    if (listeningStreamRef.current) {
+      untrackInterviewStream(listeningStreamRef.current)
+      listeningStreamRef.current.getTracks().forEach((t) => t.stop())
+      listeningStreamRef.current = null
+    }
   }, [])
 
-  // ── Play audio queue — fully imperative, no React state sequencing ─────────
-  // Why: the old useEffect approach had a bug where React's cleanup function
-  // `return () => { audio.pause() }` fired between renders and cut audio short.
-  // This version plays clips directly via a recursive callback — no state involved.
-  const playAudioQueue = useCallback((queue) => {
-    // Cancel any previous queue by bumping the play-id
-    const myId = ++activePlayIdRef.current
-
-    // Hard-stop whatever is currently playing
+  // Hard-stop all interviewer audio (queue, TTS clip, SpeechSynthesis)
+  const stopAllAIAudio = useCallback(() => {
+    activePlayIdRef.current++
+    aiAudioBusyRef.current = false
+    window.speechSynthesis?.cancel()
     if (audioRef.current) {
       audioRef.current.onended = null
       audioRef.current.onerror = null
       audioRef.current.pause()
       audioRef.current = null
     }
+    setIsAISpeaking(false)
+  }, [])
+
+  const finishAIPlayback = useCallback((myId, { onComplete, skipFlushPending = false, bypassActiveCheck = false } = {}) => {
+    if (activePlayIdRef.current !== myId) return
+    setIsAISpeaking(false)
+    aiAudioBusyRef.current = false
+    if (!bypassActiveCheck && !interviewActiveRef.current) return
+    if (!skipFlushPending && pendingPresenceWarningAudioRef.current) {
+      tryFlushPendingPresenceWarningRef.current?.()
+      return
+    }
+    onComplete?.()
+  }, [])
+
+  // Release camera/mic/VAD hardware — does NOT mark interview ended (safe for effect re-runs)
+  const releaseAllMedia = useCallback(() => {
+    clearAllTimers()
+    stopPresenceMonitor(presenceMonitorRef.current)
+    presenceMonitorRef.current = null
+    stopAllAIAudio()
+    stopListeningStream()
+
+    const seen = new Set()
+    const stopStream = (stream) => {
+      if (!stream || seen.has(stream)) return
+      seen.add(stream)
+      stream.getTracks().forEach((t) => t.stop())
+    }
+    stopStream(streamRef.current)
+    stopStream(listeningStreamRef.current)
+    if (videoRef.current?.srcObject instanceof MediaStream) {
+      stopStream(videoRef.current.srcObject)
+    }
+    streamRef.current = null
+    if (videoRef.current) videoRef.current.srcObject = null
+
+    releaseAllInterviewMedia()
+
+    if (volumeFrameRef.current) {
+      cancelAnimationFrame(volumeFrameRef.current)
+      volumeFrameRef.current = null
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {})
+      audioContextRef.current = null
+    }
+    analyserRef.current = null
+  }, [clearAllTimers, stopListeningStream, stopAllAIAudio])
+
+  // ── Play audio queue — fully imperative, no React state sequencing ─────────
+  // Why: the old useEffect approach had a bug where React's cleanup function
+  // `return () => { audio.pause() }` fired between renders and cut audio short.
+  // This version plays clips directly via a recursive callback — no state involved.
+  const playAudioQueue = useCallback((queue) => {
+    if (!interviewActiveRef.current) return
+
+    stopAllAIAudio()
+    const myId = ++activePlayIdRef.current
+    aiAudioBusyRef.current = true
 
     if (!queue || queue.length === 0) {
-      setIsAISpeaking(false)
+      finishAIPlayback(myId)
       setPhase("idle")
-      startListeningModeRef.current?.()
+      if (interviewActiveRef.current && !pendingPresenceWarningAudioRef.current) {
+        startListeningModeRef.current?.()
+      }
       return
     }
 
@@ -224,13 +292,19 @@ export default function InterviewArenaPage() {
     let index = 0
 
     const playNext = () => {
-      // If a newer queue has started, stop this one
-      if (activePlayIdRef.current !== myId) return
+      if (!interviewActiveRef.current || activePlayIdRef.current !== myId) return
 
       if (index >= queue.length) {
-        // All clips finished — start listening
-        setIsAISpeaking(false)
-        startListeningModeRef.current?.()
+        const shouldStartListening = !pendingPresenceWarningAudioRef.current
+        finishAIPlayback(myId)
+        if (
+          shouldStartListening &&
+          interviewActiveRef.current &&
+          !pendingPresenceWarningAudioRef.current &&
+          !aiAudioBusyRef.current
+        ) {
+          startListeningModeRef.current?.()
+        }
         return
       }
 
@@ -239,88 +313,261 @@ export default function InterviewArenaPage() {
       audioRef.current = audio
 
       audio.onended = playNext
-      audio.onerror = playNext   // skip broken / missing clips
-      audio.play().catch(playNext) // skip if browser rejects (e.g. autoplay)
+      audio.onerror = playNext
+      audio.play().catch(playNext)
     }
 
     playNext()
-  }, [setPhase])
+  }, [setPhase, stopAllAIAudio, finishAIPlayback])
 
-  // ── Volume monitoring (Web Audio API) ─────────────────────────────────────
+  // Speak short lines (motivation, wrap-up) with the same OpenAI TTS voice as questions
+  const playInterviewerSpeech = useCallback(async (
+    text,
+    {
+      voice,
+      context = "encouragement",
+      onComplete,
+      bypassActiveCheck = false,
+      skipFlushPending = false,
+    } = {}
+  ) => {
+    const trimmed = text?.trim()
+    if (!trimmed) {
+      onComplete?.()
+      return
+    }
+    if (!bypassActiveCheck && !interviewActiveRef.current) return
+
+    aiAudioBusyRef.current = true
+
+    try {
+      const res = await apiGenerateTts({
+        text: trimmed,
+        voice: voice || session?.interviewer?.voice,
+        context,
+      })
+
+      if (!bypassActiveCheck && !interviewActiveRef.current) {
+        aiAudioBusyRef.current = false
+        return
+      }
+
+      if (res.audio_url) {
+        stopAllAIAudio()
+        const myId = ++activePlayIdRef.current
+        aiAudioBusyRef.current = true
+        setIsAISpeaking(true)
+        setPhase("idle")
+
+        const audio = new Audio(res.audio_url)
+        audioRef.current = audio
+        const finish = () => finishAIPlayback(myId, { onComplete, skipFlushPending, bypassActiveCheck })
+        audio.onended = finish
+        audio.onerror = finish
+        audio.play().catch(finish)
+      } else {
+        aiAudioBusyRef.current = false
+        speakText(trimmed, () => {
+          if (!bypassActiveCheck && !interviewActiveRef.current) return
+          onComplete?.()
+        })
+      }
+    } catch {
+      aiAudioBusyRef.current = false
+      if (!bypassActiveCheck && !interviewActiveRef.current) return
+      speakText(trimmed, () => {
+        if (!bypassActiveCheck && !interviewActiveRef.current) return
+        onComplete?.()
+      })
+    }
+  }, [session, setPhase, stopAllAIAudio, finishAIPlayback])
+
+  const tryFlushPendingPresenceWarning = useCallback(() => {
+    if (!interviewActiveRef.current) return
+    if (!pendingPresenceWarningAudioRef.current) return
+    if (aiAudioBusyRef.current || isAISpeakingRef.current) return
+    playPresenceWarningAudioRef.current?.()
+  }, [])
+
+  const resumeInterviewListen = useCallback(() => {
+    if (!interviewActiveRef.current) return
+    if (aiAudioBusyRef.current || isAISpeakingRef.current) return
+    if (listenPhaseRef.current !== "idle") return
+    startListeningModeRef.current?.()
+  }, [])
+
+  const resumeInterviewListenRef = useRef(resumeInterviewListen)
+  useEffect(() => { resumeInterviewListenRef.current = resumeInterviewListen }, [resumeInterviewListen])
+
+  const playPresenceWarningAudio = useCallback(() => {
+    if (!interviewActiveRef.current) return
+    pendingPresenceWarningAudioRef.current = false
+    stopAllAIAudio()
+    clearAllTimers()
+    stopListeningStream()
+    setPhase("idle")
+    setStatusText("Please return to the camera frame")
+    playInterviewerSpeech(
+      "Please turn on your camera and stay in frame so we can continue the interview.",
+      {
+        voice: sessionRef.current?.interviewer?.voice,
+        context: "encouragement",
+        skipFlushPending: true,
+        onComplete: () => {
+          if (pendingResumeListenRef.current) {
+            pendingResumeListenRef.current = false
+            resumeInterviewListenRef.current?.()
+          }
+        },
+      }
+    )
+  }, [stopAllAIAudio, clearAllTimers, stopListeningStream, setPhase, playInterviewerSpeech])
+
+  useEffect(() => { playInterviewerSpeechRef.current = playInterviewerSpeech }, [playInterviewerSpeech])
+  useEffect(() => { playPresenceWarningAudioRef.current = playPresenceWarningAudio }, [playPresenceWarningAudio])
+  useEffect(() => { tryFlushPendingPresenceWarningRef.current = tryFlushPendingPresenceWarning }, [tryFlushPendingPresenceWarning])
+  useEffect(() => { sessionRef.current = session }, [session])
+  useEffect(() => { isCamOnRef.current = isCamOn }, [isCamOn])
+  useEffect(() => { isAISpeakingRef.current = isAISpeaking }, [isAISpeaking])
+
+  // Re-attach camera stream when video element remounts (e.g. cam toggle)
+  useEffect(() => {
+    if (isCamOn && streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current
+    }
+  }, [isCamOn])
+
+  // ── Continuous video presence monitoring (from interview start to end) ───────
+  useEffect(() => {
+    if (!readyToStart) return
+
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        const monitor = await createPresenceMonitor({
+          getVideoElement: () => videoRef.current,
+          getCamOn: () => isCamOnRef.current,
+          onWarning: () => {
+            setPresenceWarning(true)
+            if (aiAudioBusyRef.current || isAISpeakingRef.current) {
+              pendingPresenceWarningAudioRef.current = true
+              return
+            }
+            playPresenceWarningAudioRef.current?.()
+          },
+          onPresent: () => {
+            setPresenceWarning(false)
+            setPresenceSecondsLeft(0)
+            pendingPresenceWarningAudioRef.current = false
+            setStatusText("Listening...")
+            if (aiAudioBusyRef.current || isAISpeakingRef.current) {
+              pendingResumeListenRef.current = true
+              return
+            }
+            resumeInterviewListenRef.current?.()
+          },
+          onTick: ({ phase, elapsedMs }) => {
+            if (phase === "post_warn") {
+              setPresenceSecondsLeft(
+                Math.max(0, Math.ceil((PRESENCE_END_AFTER_WARN_MS - elapsedMs) / 1000))
+              )
+            } else {
+              setPresenceSecondsLeft(0)
+            }
+          },
+          onAbsentTooLong: () => {
+            if (presenceEndedRef.current) return
+            presenceEndedRef.current = true
+            interviewActiveRef.current = false
+            pendingPresenceWarningAudioRef.current = false
+            setPresenceWarning(false)
+            clearAllTimers()
+            stopListeningStream()
+            stopAllAIAudio()
+            stopPresenceMonitor(presenceMonitorRef.current)
+            presenceMonitorRef.current = null
+
+            const finishEnd = () => handleEndInterviewRef.current?.()
+            playInterviewerSpeechRef.current?.(
+              "I haven't been able to see you in the frame. Let's wrap up here — please check your camera and try again.",
+              {
+                voice: sessionRef.current?.interviewer?.voice,
+                context: "encouragement",
+                bypassActiveCheck: true,
+                skipFlushPending: true,
+                onComplete: finishEnd,
+              }
+            )
+            // Safety net if wrap-up audio fails or is blocked
+            setTimeout(finishEnd, 12000)
+          },
+        })
+        if (cancelled) monitor.stop()
+        else presenceMonitorRef.current = monitor
+      } catch (err) {
+        console.warn("Presence monitor failed to start:", err)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      stopPresenceMonitor(presenceMonitorRef.current)
+      presenceMonitorRef.current = null
+    }
+  }, [readyToStart, clearAllTimers, stopListeningStream, stopAllAIAudio])
+
+  // ── Volume monitoring (visual meter only — speech uses Silero VAD) ────────
   const startVolumeMonitor = useCallback(() => {
     const tick = () => {
       if (!analyserRef.current) return
 
       const data = new Uint8Array(analyserRef.current.frequencyBinCount)
       analyserRef.current.getByteFrequencyData(data)
-      // Full-spectrum average for the visual level meter (all 128 bins)
       const fullAvg = Math.round(data.reduce((a, b) => a + b, 0) / data.length)
       setAudioLevel(fullAvg)
-      // Voice-band energy: only bins covering ~80–3000 Hz for speech detection.
-      // This rejects keyboard clicks (low-freq) and hiss/fan noise (high-freq).
-      const voiceBins = data.slice(VOICE_BIN_START, VOICE_BIN_END + 1)
-      const avg = Math.round(voiceBins.reduce((a, b) => a + b, 0) / voiceBins.length)
-
-      const phase = listenPhaseRef.current
-
-      // ── First listen window: countdown → speaking ──
-      // Require SPEECH_CONFIRM_FRAMES consecutive frames above threshold to avoid
-      // triggering on keyboard noise, background sounds, or brief spikes.
-      if (phase === "countdown" && !hasSpeechRef.current) {
-        if (avg > SPEECH_THRESHOLD) {
-          consecutiveSpeechFramesRef.current += 1
-          if (consecutiveSpeechFramesRef.current >= SPEECH_CONFIRM_FRAMES) {
-            hasSpeechRef.current = true
-            consecutiveSpeechFramesRef.current = 0
-            clearInterval(countdownIntervalRef.current)
-            listenPhaseRef.current = "speaking"
-            setListenPhase("speaking")
-            setStatusText("Recording your answer...")
-          }
-        } else {
-          // Reset on any sub-threshold frame — must be sustained speech
-          consecutiveSpeechFramesRef.current = 0
-        }
-      }
-
-      if (phase === "speaking" && avg > SPEECH_THRESHOLD) {
-        clearTimeout(silenceAfterSpeechRef.current)
-        silenceAfterSpeechRef.current = setTimeout(() => {
-          if (listenPhaseRef.current === "speaking") {
-            autoSubmitRef.current?.()
-          }
-        }, SILENCE_AFTER_SPEECH_MS)
-      }
-
-      // ── Repeat-listen window: repeat_countdown → repeat_speaking ──
-      if (phase === "repeat_countdown" && !hasSpeechRef.current) {
-        if (avg > SPEECH_THRESHOLD) {
-          consecutiveSpeechFramesRef.current += 1
-          if (consecutiveSpeechFramesRef.current >= SPEECH_CONFIRM_FRAMES) {
-            hasSpeechRef.current = true
-            consecutiveSpeechFramesRef.current = 0
-            clearInterval(countdownIntervalRef.current)
-            listenPhaseRef.current = "repeat_speaking"
-            setListenPhase("repeat_speaking")
-          }
-        } else {
-          consecutiveSpeechFramesRef.current = 0
-        }
-      }
-
-      if (phase === "repeat_speaking" && avg > SPEECH_THRESHOLD) {
-        clearTimeout(silenceAfterSpeechRef.current)
-        silenceAfterSpeechRef.current = setTimeout(() => {
-          if (listenPhaseRef.current === "repeat_speaking") {
-            submitRepeatResponseRef.current?.()
-          }
-        }, 2000)
-      }
 
       volumeFrameRef.current = requestAnimationFrame(tick)
     }
     volumeFrameRef.current = requestAnimationFrame(tick)
   }, [])
+
+  // ── Silero neural VAD on the recording stream ─────────────────────────────
+  const attachSileroVad = useCallback(async (stream) => {
+    stopSpeechVad(sileroVadRef.current)
+    sileroVadRef.current = null
+
+    try {
+      sileroVadRef.current = await createSpeechVad({
+        stream,
+        onSpeechStart: () => {
+          const phase = listenPhaseRef.current
+
+          if (phase === "countdown" && !hasSpeechRef.current) {
+            hasSpeechRef.current = true
+            clearInterval(countdownIntervalRef.current)
+            setPhase("speaking")
+            setStatusText("Recording your answer...")
+          }
+
+          if (phase === "speaking") {
+            clearTimeout(silenceAfterSpeechRef.current)
+          }
+        },
+        onSpeechEnd: () => {
+          if (listenPhaseRef.current !== "speaking") return
+          clearTimeout(silenceAfterSpeechRef.current)
+          silenceAfterSpeechRef.current = setTimeout(() => {
+            if (listenPhaseRef.current === "speaking") {
+              autoSubmitRef.current?.()
+            }
+          }, SILENCE_AFTER_SPEECH_MS)
+        },
+      })
+    } catch (err) {
+      console.warn("Silero VAD failed to start — silence timers will still run:", err)
+    }
+  }, [setPhase])
 
   // ── Camera + analyser init ─────────────────────────────────────────────────
   useEffect(() => {
@@ -329,6 +576,7 @@ export default function InterviewArenaPage() {
         .getUserMedia({ video: true, audio: true })
         .then((stream) => {
           streamRef.current = stream
+          trackInterviewStream(stream)
           if (videoRef.current) videoRef.current.srcObject = stream
 
           // Build analyser from the camera stream's audio tracks
@@ -346,14 +594,10 @@ export default function InterviewArenaPage() {
         .catch(() => {})
     }
     return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop())
-      streamRef.current = null
-      if (videoRef.current) videoRef.current.srcObject = null
-      if (volumeFrameRef.current) cancelAnimationFrame(volumeFrameRef.current)
-      audioContextRef.current?.close()
-      audioContextRef.current = null
-      analyserRef.current = null
+      releaseAllMedia()
     }
+  // releaseAllMedia only used for unmount cleanup — omit from deps to avoid spurious teardown
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startVolumeMonitor])
 
   // ── Session load ───────────────────────────────────────────────────────────
@@ -393,6 +637,10 @@ export default function InterviewArenaPage() {
 
   // ── Handle "Ready" click — unlocks audio and starts the interview ───────────
   const handleReady = useCallback(() => {
+    interviewActiveRef.current = true
+    presenceEndedRef.current = false
+    presenceEndNavigatedRef.current = false
+    pendingPresenceWarningAudioRef.current = false
     setReadyToStart(true)
     if (pendingFirstAudioRef.current) {
       playAudioQueue([{ url: pendingFirstAudioRef.current, label: "question" }])
@@ -400,12 +648,17 @@ export default function InterviewArenaPage() {
       // No TTS audio generated — speak the question via browser SpeechSynthesis
       // so the candidate always hears something before auto-listen begins.
       const text = displayedText || "Tell me about yourself."
-      speakText(text, () => startListeningModeRef.current?.())
+      playInterviewerSpeech(text, {
+        voice: session?.interviewer?.voice,
+        context: "question",
+        onComplete: () => startListeningModeRef.current?.(),
+      })
     }
-  }, [playAudioQueue, displayedText])
+  }, [playAudioQueue, displayedText, playInterviewerSpeech, session])
 
   // ── Core: start listening mode ─────────────────────────────────────────────
   const startListeningMode = useCallback(async () => {
+    if (!interviewActiveRef.current) return
     if (!isMicOn) {
       setStatusText("Microphone is off — turn it on to answer")
       return
@@ -413,12 +666,12 @@ export default function InterviewArenaPage() {
 
     clearAllTimers()
     hasSpeechRef.current = false
-    consecutiveSpeechFramesRef.current = 0
     audioChunksRef.current = []
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS })
       listeningStreamRef.current = stream
+      trackInterviewStream(stream)
 
       const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
       mediaRecorderRef.current = recorder
@@ -426,13 +679,14 @@ export default function InterviewArenaPage() {
         if (e.data.size > 0) audioChunksRef.current.push(e.data)
       }
       recorder.start()
+      await attachSileroVad(stream)
 
       setPhase("countdown")
       setCountdownValue(FIRST_COUNTDOWN_S)
       setStatusText("Listening...")
       setError("")
 
-      // Countdown — when it hits 0, trigger repeat-prompt flow
+      // Countdown — when it hits 0, auto-rephrase the question
       let remaining = FIRST_COUNTDOWN_S
       countdownIntervalRef.current = setInterval(() => {
         remaining -= 1
@@ -445,7 +699,7 @@ export default function InterviewArenaPage() {
     } catch {
       setError("Could not access microphone. Please check permissions.")
     }
-  }, [isMicOn, clearAllTimers, setPhase])
+  }, [isMicOn, clearAllTimers, setPhase, attachSileroVad])
 
   // Keep ref current so audio queue end handler can call it.
   // startListeningDefaultRef mirrors the base (non-second-chance) version so
@@ -460,6 +714,7 @@ export default function InterviewArenaPage() {
 
   // ── Core: auto-submit recording ────────────────────────────────────────────
   const autoSubmitRecording = useCallback(async () => {
+    if (!interviewActiveRef.current) return
     clearAllTimers()
     setPhase("processing")
     stopListeningStream()
@@ -548,6 +803,8 @@ export default function InterviewArenaPage() {
             voice: interviewerVoice,
           })
 
+      if (!interviewActiveRef.current) return
+
       // Persist answered question for feedback page
       const stored = JSON.parse(localStorage.getItem("interviewSession") || "{}")
       const answeredQuestions = stored.answeredQuestions || []
@@ -593,10 +850,9 @@ export default function InterviewArenaPage() {
       }))
 
       // Reset repeat state and restore base listening mode for next question.
-      // handleRepeatQuestion sets startListeningModeRef → startListeningModeWithSecondChance;
-      // we must restore it here so subsequent questions use the normal repeat-prompt flow.
       repeatAttemptRef.current = false
       startListeningModeRef.current = startListeningDefaultRef.current
+      consecutiveSilentSkipsRef.current = 0
 
       // ── Flow control ────────────────────────────────────────────────────
       const nextQuestion = resp.next_question
@@ -661,135 +917,93 @@ export default function InterviewArenaPage() {
 
   useEffect(() => { autoSubmitRef.current = autoSubmitRecording }, [autoSubmitRecording])
 
-  // ── First silence timeout (20s no speech) → ask if user wants repeat ──────
-  const handleFirstSilenceTimeout = useCallback(() => {
+  // ── LLM rephrase + interviewer TTS — show rephrased text on screen ─────────
+  const speakRephrasedQuestion = useCallback(async (onComplete) => {
+    if (!interviewActiveRef.current) return
+    const questionText = (currentQuestion?.text || displayedText || "").trim()
+    if (!questionText || !session?.role) {
+      onComplete?.()
+      return
+    }
+
+    setIsProcessing(true)
+    setStatusText("Processing…")
+
+    try {
+      const result = await apiRephraseQuestion({
+        questionText,
+        role: session.role,
+        generateAudio: true,
+        voice: session.interviewer?.voice,
+      })
+      if (!interviewActiveRef.current) return
+
+      const rephrased = result.rephrased_text?.trim() || questionText
+      setDisplayedText(rephrased)
+      setCurrentQuestion((prev) => (prev ? { ...prev, text: rephrased } : prev))
+
+      if (result.audio_url) {
+        setIsProcessing(false)
+        playAudioQueue([{ url: result.audio_url, label: "question" }])
+      } else {
+        setIsProcessing(false)
+        await playInterviewerSpeech(rephrased, {
+          voice: session.interviewer?.voice,
+          context: "question",
+          onComplete,
+        })
+      }
+    } catch {
+      setIsProcessing(false)
+      setError("Could not rephrase the question — please listen and try again.")
+      await playInterviewerSpeech(questionText, {
+        voice: session.interviewer?.voice,
+        context: "question",
+        onComplete,
+      })
+    }
+  }, [session, currentQuestion, displayedText, playAudioQueue, playInterviewerSpeech])
+
+  // ── First silence timeout (12s) → auto-rephrase and re-ask ────────────────
+  const handleFirstSilenceTimeout = useCallback(async () => {
+    if (!interviewActiveRef.current) return
     stopListeningStream()
     audioChunksRef.current = []
-    setPhase("repeat_prompt")
-    setStatusText("Checking in with you...")
+    repeatAttemptRef.current = true
+    startListeningModeRef.current = startListeningSecondChanceRef.current
 
-    speakText(
-      "Do you want me to repeat the question?",
-      () => startRepeatListeningRef.current?.()
-    )
-  }, [stopListeningStream, setPhase])
+    await speakRephrasedQuestion(() => startListeningSecondChanceRef.current?.())
+  }, [stopListeningStream, speakRephrasedQuestion])
 
   const handleFirstSilenceTimeoutRef = useRef(handleFirstSilenceTimeout)
   useEffect(() => { handleFirstSilenceTimeoutRef.current = handleFirstSilenceTimeout }, [handleFirstSilenceTimeout])
 
-  // ── Start listening for user's yes/no response ────────────────────────────
-  const startRepeatListening = useCallback(async () => {
-    hasSpeechRef.current = false
-    consecutiveSpeechFramesRef.current = 0
-    audioChunksRef.current = []
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      listeningStreamRef.current = stream
-
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
-      mediaRecorderRef.current = recorder
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data)
-      }
-      recorder.start()
-
-      setPhase("repeat_countdown")
-      setCountdownValue(REPEAT_LISTEN_S)
-      setStatusText("Say 'Yes' to repeat, or 'No' to continue…")
-
-      let remaining = REPEAT_LISTEN_S
-      countdownIntervalRef.current = setInterval(() => {
-        remaining -= 1
-        setCountdownValue(remaining)
-        if (remaining <= 0) {
-          clearInterval(countdownIntervalRef.current)
-          submitRepeatResponseRef.current?.()
-        }
-      }, 1000)
-    } catch {
-      // Mic error → just skip
-      handleWaitThenSkipRef.current?.()
-    }
-  }, [setPhase])
-
-  const startRepeatListeningRef = useRef(startRepeatListening)
-  useEffect(() => { startRepeatListeningRef.current = startRepeatListening }, [startRepeatListening])
-
-  // ── Submit yes/no response ─────────────────────────────────────────────────
-  const submitRepeatResponse = useCallback(async () => {
-    clearInterval(countdownIntervalRef.current)
-    stopListeningStream()
-    await new Promise((r) => setTimeout(r, 200))
-
-    const blob = new Blob(audioChunksRef.current, { type: "audio/webm" })
-
-    let transcript = ""
-    if (blob.size > 400) {
-      try {
-        const res = await apiTranscribe(blob)
-        transcript = res.transcript || ""
-      } catch {}
-    }
-
-    const isYes = YES_REGEX.test(transcript)
-    const isNo = NO_REGEX.test(transcript)
-
-    if (isYes || (!isNo && transcript.trim())) {
-      // Yes (or something unclear but the user said something — give benefit of doubt)
-      handleRepeatQuestionRef.current?.()
-    } else {
-      // No / silence
-      handleWaitThenSkipRef.current?.()
-    }
-  }, [stopListeningStream])
-
-  useEffect(() => { submitRepeatResponseRef.current = submitRepeatResponse }, [submitRepeatResponse])
-
-  // ── User said yes → replay question audio ─────────────────────────────────
-  const handleRepeatQuestion = useCallback(() => {
+  // ── User asked to repeat mid-answer → paraphrase and second listen ────────
+  const handleRepeatQuestion = useCallback(async () => {
     repeatAttemptRef.current = true
-    // Reset voice detection state so the second-chance listen window starts clean.
-    // Without this, stale frame counts from the yes/no listen phase can
-    // immediately flip phase to "speaking" before the user has said a word.
     hasSpeechRef.current = false
-    consecutiveSpeechFramesRef.current = 0
-    // Synchronously override the queue-end handler so that when the replayed
-    // audio finishes, auto-listen goes directly to startListeningModeWithSecondChance
-    // (second silence → motivational) instead of back to startListeningMode
-    // (which would restart the "want a repeat?" loop).
-    startListeningModeRef.current = startListeningModeWithSecondChance
-    setPhase("idle")
+    startListeningModeRef.current = startListeningSecondChanceRef.current
 
-    if (currentQuestion?.audio_url) {
-      playAudioQueue([{ url: currentQuestion.audio_url, label: "question" }])
-    } else {
-      // No audio cached — go straight to second listening attempt
-      startListeningModeWithSecondChance()
-    }
-  // NOTE: startListeningModeWithSecondChance is intentionally omitted from deps.
-  // It is declared AFTER this useCallback in the component, so including it in
-  // the dep array would cause a TDZ ReferenceError. The closure body is safe
-  // (lazy-evaluated). handleRepeatQuestionRef.current is always kept fresh so
-  // callers always invoke the latest version.
+    await speakRephrasedQuestion(() => startListeningSecondChanceRef.current?.())
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentQuestion, playAudioQueue, setPhase])
+  }, [speakRephrasedQuestion])
 
   const handleRepeatQuestionRef = useRef(handleRepeatQuestion)
   useEffect(() => { handleRepeatQuestionRef.current = handleRepeatQuestion }, [handleRepeatQuestion])
 
-  // ── Second listening attempt (after repeat) ───────────────────────────────
-  // Same as startListeningMode but timeout → motivating instead of repeat_prompt
+  // ── Second listening attempt (after rephrase) ─────────────────────────────
+  // Same 12s window; silence → motivational message → skip to next question
   const startListeningModeWithSecondChance = useCallback(async () => {
+    if (!interviewActiveRef.current) return
     if (!isMicOn) return
     clearAllTimers()
     hasSpeechRef.current = false
-    consecutiveSpeechFramesRef.current = 0
     audioChunksRef.current = []
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS })
       listeningStreamRef.current = stream
+      trackInterviewStream(stream)
 
       const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
       mediaRecorderRef.current = recorder
@@ -797,6 +1011,7 @@ export default function InterviewArenaPage() {
         if (e.data.size > 0) audioChunksRef.current.push(e.data)
       }
       recorder.start()
+      await attachSileroVad(stream)
 
       setPhase("countdown")
       setCountdownValue(FIRST_COUNTDOWN_S)
@@ -815,64 +1030,95 @@ export default function InterviewArenaPage() {
     } catch {
       setError("Could not access microphone.")
     }
-  }, [isMicOn, clearAllTimers, setPhase])
+  }, [isMicOn, clearAllTimers, setPhase, attachSileroVad])
 
-  // NOTE: startListeningModeRef is set synchronously in two places:
-  //   • handleRepeatQuestion  → switches to startListeningModeWithSecondChance
-  //   • autoSubmitRecording   → resets back to startListeningDefaultRef.current
-  // The useEffect that previously tried to do this here was broken because it
-  // read repeatAttemptRef.current (a ref) inside its condition — refs don't
-  // trigger effect re-runs, so the override never fired. Removed.
+  useEffect(() => {
+    startListeningSecondChanceRef.current = startListeningModeWithSecondChance
+  }, [startListeningModeWithSecondChance])
 
-  // ── Second silence timeout → motivational message ──────────────────────────
-  const handleSecondSilenceTimeout = useCallback(() => {
+  // ── Second silence timeout → encouragement, then next question ─────────────
+  const handleSecondSilenceTimeout = useCallback(async () => {
+    if (!interviewActiveRef.current) return
     stopListeningStream()
     audioChunksRef.current = []
     repeatAttemptRef.current = false
+    startListeningModeRef.current = startListeningDefaultRef.current
 
     const msg = MOTIVATIONAL_MESSAGES[Math.floor(Math.random() * MOTIVATIONAL_MESSAGES.length)]
-    setPhase("motivating")
-    setStatusText(msg)
+    setPhase("idle")
 
-    speakText(msg, () => {
-      // After encouragement, wait then skip
-      handleWaitThenSkipRef.current?.()
+    await playInterviewerSpeech(msg, {
+      voice: session?.interviewer?.voice,
+      context: "encouragement",
+      onComplete: () => handleSkipToNextRef.current?.(),
     })
-  }, [stopListeningStream, setPhase])
+  }, [stopListeningStream, setPhase, playInterviewerSpeech, session])
 
   const handleSecondSilenceTimeoutRef = useRef(handleSecondSilenceTimeout)
   useEffect(() => { handleSecondSilenceTimeoutRef.current = handleSecondSilenceTimeout }, [handleSecondSilenceTimeout])
 
-  // ── User said no / motivating done → 10s countdown then skip ─────────────
-  const handleWaitThenSkip = useCallback(() => {
-    setPhase("second_countdown")
-    setSkipCountdownValue(SKIP_COUNTDOWN_S)
-
-    let remaining = SKIP_COUNTDOWN_S
-    skipIntervalRef.current = setInterval(() => {
-      remaining -= 1
-      setSkipCountdownValue(remaining)
-      if (remaining <= 0) {
-        clearInterval(skipIntervalRef.current)
-        handleSkipToNextRef.current?.()
-      }
-    }, 1000)
-  }, [setPhase])
-
-  const handleWaitThenSkipRef = useRef(handleWaitThenSkip)
-  useEffect(() => { handleWaitThenSkipRef.current = handleWaitThenSkip }, [handleWaitThenSkip])
-
-  // ── Skip to next question ─────────────────────────────────────────────────
+  // ── Skip to next question (after silent timeout) ───────────────────────────
   const handleSkipToNext = useCallback(async () => {
+    if (!interviewActiveRef.current) return
     clearAllTimers()
     setPhase("processing")
     setIsProcessing(true)
     repeatAttemptRef.current = false
-    // Reset to normal listen mode ref
     startListeningModeRef.current = startListeningMode
 
+    consecutiveSilentSkipsRef.current += 1
+    if (consecutiveSilentSkipsRef.current >= MAX_CONSECUTIVE_SILENT_SKIPS) {
+      interviewActiveRef.current = false
+      setIsProcessing(false)
+      setPhase("idle")
+      stopAllAIAudio()
+      await playInterviewerSpeech(
+        "It looks like we're having trouble hearing you. Let's wrap up here.",
+        {
+          voice: session?.interviewer?.voice,
+          context: "encouragement",
+          bypassActiveCheck: true,
+          skipFlushPending: true,
+          onComplete: () => handleEndInterviewRef.current?.(),
+        }
+      )
+      return
+    }
+
+    const applyNextQuestion = (nextQuestion, aiResponse) => {
+      if (!interviewActiveRef.current) return false
+      if (!nextQuestion?.question) return false
+
+      const nq = nextQuestion.question
+      const qid = nq.id ?? (questionNumber + 1)
+      if (usedQuestionIdsRef.current.has(qid)) {
+        handleEndInterviewRef.current?.()
+        return true
+      }
+      usedQuestionIdsRef.current.add(qid)
+
+      setCurrentQuestion(nq)
+      setQuestionNumber(qid)
+      setDisplayedText(nq.text || "")
+      setWaitingForFollowUp(false)
+      waitingForFollowUpRef.current = false
+      setFollowUpProbeText("")
+
+      const queue = buildAudioQueue(aiResponse, nextQuestion, false)
+      if (queue.length > 0) {
+        playAudioQueue(queue)
+      } else {
+        setPhase("idle")
+        playInterviewerSpeech(nq.text || "", {
+          voice: session?.interviewer?.voice,
+          context: "question",
+          onComplete: () => startListeningModeRef.current?.(),
+        })
+      }
+      return true
+    }
+
     try {
-      // Record skipped question in session before calling backend
       const storedSkip = JSON.parse(localStorage.getItem("interviewSession") || "{}")
       const answeredSkip = storedSkip.answeredQuestions || []
       answeredSkip.push({
@@ -900,48 +1146,45 @@ export default function InterviewArenaPage() {
         difficulty: session.difficulty,
         totalQuestions,
         generateAudio: true,
+        voice: session.interviewer?.voice,
       })
 
-      const nextQuestion = resp.next_question
-      setWaitingForFollowUp(false)
-      waitingForFollowUpRef.current = false
-      setFollowUpProbeText("")
+      if (!interviewActiveRef.current) return
 
-      if (nextQuestion?.question) {
-        const nq = nextQuestion.question
-        const qid = nq.id ?? (questionNumber + 1)
-        if (usedQuestionIdsRef.current.has(qid)) {
-          handleEndInterviewRef.current?.()
-          return
-        }
-        usedQuestionIdsRef.current.add(qid)
+      if (applyNextQuestion(resp.next_question, resp.ai_response)) return
 
-        setCurrentQuestion(nq)
-        setQuestionNumber(nq.id || questionNumber + 1)
-        setDisplayedText(nq.text || "")
-
-        const queue = buildAudioQueue(resp.ai_response, nextQuestion, false)
-        if (queue.length > 0) {
-          playAudioQueue(queue)
-        } else {
-          setPhase("idle")
-          startListeningModeRef.current?.()
-        }
-      } else {
+      // Backend did not return next question — fetch it directly as fallback
+      const nextNum = (currentQuestion?.id || questionNumber) + 1
+      if (nextNum > totalQuestions) {
         handleEndInterviewRef.current?.()
+        return
       }
+
+      const fallback = await apiGetNextQuestion({
+        sessionId: session.sessionId,
+        currentQuestionNumber: nextNum,
+        role: session.role,
+        difficulty: session.difficulty,
+        totalQuestions,
+      })
+
+      if (!interviewActiveRef.current) return
+
+      applyNextQuestion(
+        { question: fallback.question, interviewer_comment: fallback.interviewer_comment },
+        resp.ai_response
+      )
     } catch (err) {
-      setError(err.message || "Something went wrong. Ending interview.")
-      handleEndInterviewRef.current?.()
+      setError(err.message || "Failed to load the next question. Please try again.")
+      setPhase("idle")
     } finally {
       setIsProcessing(false)
     }
   }, [
     session, currentQuestion, questionNumber, displayedText,
-    totalQuestions, clearAllTimers, setPhase, playAudioQueue, startListeningMode,
+    totalQuestions, clearAllTimers, setPhase, playAudioQueue, startListeningMode, playInterviewerSpeech, stopAllAIAudio,
   ])
 
-  const handleSkipToNextRef = useRef(handleSkipToNext)
   useEffect(() => { handleSkipToNextRef.current = handleSkipToNext }, [handleSkipToNext])
 
   // ── Repeat question (manual button) ───────────────────────────────────────
@@ -956,29 +1199,18 @@ export default function InterviewArenaPage() {
 
   // ── End interview ──────────────────────────────────────────────────────────
   const handleEndInterview = useCallback(() => {
+    if (presenceEndNavigatedRef.current) return
+    presenceEndNavigatedRef.current = true
+    interviewActiveRef.current = false
+    presenceEndedRef.current = true
+    pendingPresenceWarningAudioRef.current = false
     clearAllTimers()
-    window.speechSynthesis?.cancel()
-    // Cancel any running audio queue
-    activePlayIdRef.current++
-    if (audioRef.current) {
-      audioRef.current.onended = null
-      audioRef.current.onerror = null
-      audioRef.current.pause()
-      audioRef.current = null
-    }
     stopListeningStream()
-    // Stop all camera + mic tracks so browser removes the recording indicator
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    streamRef.current = null
-    // Clear video element — removes the frozen frame and releases the camera
-    if (videoRef.current) videoRef.current.srcObject = null
-    // Stop volume monitoring and close Web Audio context
-    if (volumeFrameRef.current) cancelAnimationFrame(volumeFrameRef.current)
-    audioContextRef.current?.close()
-    audioContextRef.current = null
-    analyserRef.current = null
+    stopAllAIAudio()
+    stopPresenceMonitor(presenceMonitorRef.current)
+    presenceMonitorRef.current = null
     navigate("/feedback")
-  }, [clearAllTimers, stopListeningStream])
+  }, [clearAllTimers, stopListeningStream, stopAllAIAudio, navigate])
 
   const handleEndInterviewRef = useRef(handleEndInterview)
   useEffect(() => { handleEndInterviewRef.current = handleEndInterview }, [handleEndInterview])
@@ -989,8 +1221,7 @@ export default function InterviewArenaPage() {
 
   // Countdown ring for SVG circle (r=18, circumference ≈ 113)
   const RING_CIRC = 113
-  const maxCountdown =
-    listenPhase === "repeat_countdown" ? REPEAT_LISTEN_S : FIRST_COUNTDOWN_S
+  const maxCountdown = FIRST_COUNTDOWN_S
   const ringOffset = RING_CIRC - (RING_CIRC * countdownValue) / maxCountdown
 
   // Audio level bars (5 bars)
@@ -1078,7 +1309,10 @@ export default function InterviewArenaPage() {
 
         {/* Left: User Camera */}
         <div className="w-80 flex flex-col">
-          <div className="relative bg-card rounded-2xl overflow-hidden border border-border flex-1">
+          <div className={cn(
+            "relative bg-card rounded-2xl overflow-hidden border flex-1",
+            presenceWarning ? "border-amber-500 border-2" : "border-border"
+          )}>
             <div className="absolute top-4 left-4 z-10 flex gap-2">
               <button
                 onClick={() => setIsMicOn(!isMicOn)}
@@ -1100,16 +1334,46 @@ export default function InterviewArenaPage() {
               </button>
             </div>
 
-            {isCamOn ? (
-              <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
+              className={cn(
+                "w-full h-full object-cover scale-x-[-1]",
+                !isCamOn && "hidden"
+              )}
+            />
+            {!isCamOn && (
+              <div className="absolute inset-0 flex items-center justify-center bg-secondary/30">
                 <span className="text-muted-foreground text-sm">Camera Off</span>
               </div>
             )}
 
+            {/* Presence — 3s warn, then 10s countdown → end (13s total if still absent) */}
+            {readyToStart && presenceWarning && (
+              <div className="absolute inset-x-0 bottom-0 z-20 bg-amber-500/95 text-amber-950 px-3 py-3 text-center">
+                <p className="text-xs font-semibold">
+                  Please turn on your camera and stay in frame
+                </p>
+                {presenceSecondsLeft > 0 && (
+                  <p className="text-[11px] mt-1 opacity-90">
+                    Interview will end in {presenceSecondsLeft}s
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Live monitoring indicator */}
+            {readyToStart && !presenceWarning && isCamOn && (
+              <div className="absolute top-14 left-4 z-10 flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/40 text-[10px] text-white/80">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Monitoring
+              </div>
+            )}
+
             {/* Mic activity indicator in camera panel */}
-            {(listenPhase === "speaking" || listenPhase === "repeat_speaking") && (
+            {listenPhase === "speaking" && (
               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-end gap-1">
                 {bars.map((active, i) => (
                   <div
@@ -1177,29 +1441,6 @@ export default function InterviewArenaPage() {
                 {followUpProbeText}
               </div>
             )}
-
-            {/* Repeat prompt banner */}
-            {(listenPhase === "repeat_prompt" || listenPhase === "repeat_countdown" || listenPhase === "repeat_speaking") && (
-              <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 px-4 py-3 text-sm text-amber-400 text-center">
-                {listenPhase === "repeat_prompt"
-                  ? "Checking in with you…"
-                  : `Say "Yes" to repeat or "No" to continue (${countdownValue}s)`}
-              </div>
-            )}
-
-            {/* Motivational message banner */}
-            {listenPhase === "motivating" && (
-              <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 px-5 py-4 text-sm text-emerald-400 text-center leading-relaxed">
-                {statusText}
-              </div>
-            )}
-
-            {/* Skip countdown banner */}
-            {listenPhase === "second_countdown" && (
-              <div className="rounded-xl bg-secondary border border-border px-4 py-3 text-sm text-muted-foreground text-center">
-                Moving to the next question in {skipCountdownValue}s…
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -1255,7 +1496,7 @@ export default function InterviewArenaPage() {
             )}
 
             {/* Countdown ring — waiting for first word */}
-            {(listenPhase === "countdown" || listenPhase === "repeat_countdown") && !isProcessing && (
+            {(listenPhase === "countdown") && !isProcessing && (
               <div className="flex items-center gap-3">
                 <div className="relative w-10 h-10">
                   <svg className="w-10 h-10 -rotate-90" viewBox="0 0 40 40">
@@ -1263,7 +1504,7 @@ export default function InterviewArenaPage() {
                       strokeWidth="3" className="text-secondary" />
                     <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor"
                       strokeWidth="3" strokeLinecap="round"
-                      className={listenPhase === "repeat_countdown" ? "text-amber-400" : "text-primary"}
+                      className="text-primary"
                       style={{
                         strokeDasharray: RING_CIRC,
                         strokeDashoffset: ringOffset,
@@ -1276,20 +1517,16 @@ export default function InterviewArenaPage() {
                   </span>
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-foreground text-sm font-medium">
-                    {listenPhase === "repeat_countdown" ? "Listening for your response…" : "Listening…"}
-                  </span>
+                  <span className="text-foreground text-sm font-medium">Listening…</span>
                   <span className="text-muted-foreground text-xs">
-                    {listenPhase === "repeat_countdown"
-                      ? 'Say "Yes" or "No"'
-                      : "Start speaking whenever you're ready"}
+                    Start speaking whenever you&apos;re ready
                   </span>
                 </div>
               </div>
             )}
 
             {/* Active recording indicator */}
-            {(listenPhase === "speaking" || listenPhase === "repeat_speaking") && !isProcessing && (
+            {listenPhase === "speaking" && !isProcessing && (
               <div className="flex items-center gap-3">
                 <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
                 <div className="flex items-end gap-0.5">
@@ -1306,38 +1543,20 @@ export default function InterviewArenaPage() {
                 </div>
                 <span className="text-red-400 text-sm font-medium">Recording…</span>
                 <span className="text-muted-foreground text-xs">
-                  {listenPhase === "repeat_speaking" ? "Detecting your response…" : "Will auto-submit when you stop"}
+                  Will auto-submit when you stop
                 </span>
-              </div>
-            )}
-
-            {/* Skip countdown */}
-            {listenPhase === "second_countdown" && (
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-secondary border-t-muted-foreground rounded-full animate-spin" />
-                <span className="text-muted-foreground text-sm">
-                  Next question in {skipCountdownValue}s
-                </span>
-              </div>
-            )}
-
-            {/* Motivating */}
-            {listenPhase === "motivating" && (
-              <div className="flex items-center gap-2">
-                <span className="text-emerald-400 text-sm font-medium">💬 {statusText}</span>
-              </div>
-            )}
-
-            {/* Repeat prompt */}
-            {listenPhase === "repeat_prompt" && (
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-                <span className="text-amber-400 text-sm">Asking if you need a repeat…</span>
               </div>
             )}
 
             {/* Idle fallback */}
-            {listenPhase === "idle" && !isAISpeaking && !isProcessing && (
+            {listenPhase === "idle" && !isAISpeaking && !isProcessing && presenceWarning && (
+              <span className="text-amber-400 text-sm font-medium">
+                {presenceSecondsLeft > 0
+                  ? `Out of frame — interview ends in ${presenceSecondsLeft}s`
+                  : "Please return to the camera frame"}
+              </span>
+            )}
+            {listenPhase === "idle" && !isAISpeaking && !isProcessing && !presenceWarning && (
               <span className="text-muted-foreground text-sm">Preparing…</span>
             )}
           </div>

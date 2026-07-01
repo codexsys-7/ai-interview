@@ -30,6 +30,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Markers sent by the frontend when the candidate gives no spoken answer
+_SILENT_ANSWER_MARKERS = ("[no response", "candidate skipped", "[skipped]")
+
+
+def is_silent_answer(answer: str) -> bool:
+    """Return True if the answer text represents a silent skip, not a real response."""
+    lower = (answer or "").lower()
+    return any(marker in lower for marker in _SILENT_ANSWER_MARKERS)
+
 
 class RealtimeResponseGenerator:
     """
@@ -141,6 +150,30 @@ class RealtimeResponseGenerator:
         logger.info(f"Answer length: {len(answer)} chars, Intent: {question_intent}")
 
         try:
+            # Silent skip — no real answer; use dedicated copy, never praise a non-answer
+            if is_silent_answer(answer):
+                acknowledgment_text = self.personality.generate_silent_skip_acknowledgment()
+                logger.info("Silent skip detected — using no-response acknowledgment")
+                return {
+                    "acknowledgment": {
+                        "text": acknowledgment_text,
+                        "should_speak": True,
+                        "tone": "neutral",
+                    },
+                    "follow_up_probe": None,
+                    "needs_clarification": False,
+                    "should_proceed_to_next": True,
+                    "response_delay_ms": 300,
+                    "quality_metrics": {
+                        "overall_quality": "silent",
+                        "completeness_score": 0.0,
+                        "specificity_score": 0.0,
+                        "is_vague": True,
+                        "missing_elements": [],
+                    },
+                    "action_taken": "silent_skip",
+                }
+
             # Step 1: Analyze answer quality (use provided or compute)
             if quality_metrics:
                 metrics = quality_metrics

@@ -40,4 +40,7 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    exclude: ['@ricky0123/vad-web', '@mediapipe/tasks-vision'],
+  },
 })

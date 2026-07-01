@@ -1069,6 +1069,39 @@ Return ONLY the closing question text. No preamble."""
 
         return prompt
 
+    @staticmethod
+    def rephrase_question(original_question: str, role: str = "candidate") -> str:
+        """
+        Prompt for rephrasing a question the candidate did not answer.
+
+        Args:
+            original_question: The question text that was already asked
+            role: Job role being interviewed for
+
+        Returns:
+            Formatted prompt for LLM rephrasing
+        """
+        return f"""You are a professional interviewer conducting a {role} interview.
+
+The candidate did not respond to this question (they may not have heard or understood it):
+"{original_question}"
+
+Rephrase this question using DIFFERENT WORDS while keeping the exact same intent and topic.
+
+Rules:
+- Do NOT reuse the same opening phrase or sentence structure
+- Ask for the same information in a fresh, natural way
+- One spoken question only (1-2 sentences maximum)
+- No preamble like "Let me rephrase" — output only the new question
+- Sound warm and conversational
+
+Example:
+Original: "Tell me about a challenging project you worked on recently."
+Good: "What's a difficult project you've tackled in the past year, and how did you handle it?"
+Bad: "Tell me about a challenging project that you have worked recently." (too similar)
+
+Return ONLY the rephrased question text."""
+
 
 # Convenience aliases for common prompt types
 StandardPrompt = PromptTemplates.standard_question

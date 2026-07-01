@@ -166,6 +166,24 @@ class InterviewerPersonality:
         ],
     }
 
+    # Used when the candidate gave no spoken answer (silent skip after rephrase timeout)
+    SILENT_SKIP_ACKNOWLEDGMENTS = [
+        "No worries — that's completely okay.",
+        "That's fine, no problem at all.",
+        "Okay, we can move on from that one.",
+        "No answer needed there — let's keep going.",
+        "That's alright, let's continue.",
+        "Okay, no stress — we'll move forward.",
+    ]
+
+    SILENT_SKIP_TRANSITIONS = [
+        "Let's try a different question.",
+        "I'll shift to the next topic.",
+        "Let's move on to something else.",
+        "Let's continue with another question.",
+        "Moving on to the next one.",
+    ]
+
     # Transition responses by type
     TRANSITIONS = {
         "natural": [
@@ -490,6 +508,24 @@ class InterviewerPersonality:
         )
 
         logger.debug(f"Generated acknowledgment ({quality_key}): {response}")
+        return response
+
+    def generate_silent_skip_acknowledgment(self) -> str:
+        """Acknowledge a silent / skipped question without implying the candidate answered."""
+        response = self._select_varied_response(
+            self.SILENT_SKIP_ACKNOWLEDGMENTS,
+            self._recent_acknowledgments,
+        )
+        logger.debug(f"Generated silent-skip acknowledgment: {response}")
+        return response
+
+    def generate_silent_skip_transition(self) -> str:
+        """Transition to the next question after a silent skip."""
+        response = self._select_varied_response(
+            self.SILENT_SKIP_TRANSITIONS,
+            self._recent_transitions,
+        )
+        logger.debug(f"Generated silent-skip transition: {response}")
         return response
 
     def generate_encouragement(

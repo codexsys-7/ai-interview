@@ -12,6 +12,7 @@ import { GlowingOrb } from "@/components/glowing-orb"
 import { UserStatus } from "@/components/user-status"
 import { cn } from "@/lib/utils"
 import { apiScoreInterview } from "@/api/client"
+import { releaseAllInterviewMedia } from "@/utils/interviewMedia"
 
 // Convert 0-5 score to 0-100
 const toPercent = (v) => Math.round((parseFloat(v) || 0) * 20)
@@ -93,6 +94,10 @@ export default function FeedbackPage() {
   const [isDownloading, setIsDownloading] = useState(false)
   const [feedbackData, setFeedbackData] = useState(null)
   const [loadError, setLoadError] = useState("")
+
+  useEffect(() => {
+    releaseAllInterviewMedia()
+  }, [])
 
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem("interviewSession") || "null")
